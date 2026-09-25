@@ -1,0 +1,9 @@
+{
+  "name": "Nova IA",
+  "short_name": "NovaIA",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0182c6",
+  "icons": []
+}
