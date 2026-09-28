@@ -1,5 +1,5 @@
 // Troque pela URL do seu backend depois de fazer o deploy (ex: Render)
-const API_URL = 'http://localhost:3001';
+const API_URL = 'https://nova-ia-backend.onrender.com';
 
 // ---------- Navegação entre abas ----------
 document.querySelectorAll('.nav-item').forEach(btn => {
