@@ -18,10 +18,11 @@ const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 // Todos são gratuitos na OpenRouter no momento em que este código foi escrito —
 // confira em https://openrouter.ai/models?max_price=0 se a lista mudou.
 const MODEL_FALLBACK = [
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemini-2.0-flash-exp:free',
-  'deepseek/deepseek-chat:free',
+  'const MODEL_FALLBACK = [
+  'openrouter/free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
 ];
+
 
 // ---------- Armazenamento simples em arquivo (sem precisar de banco) ----------
 const DB_DIR = path.join(__dirname, 'data');
