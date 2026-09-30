@@ -1,7 +1,9 @@
-// server.js — backend proxy da sua IA (com banco de dados e senha)
+// server.js — backend proxy da sua IA (com banco de dados e login por usuário)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
 const app = express();
@@ -10,7 +12,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
-const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
 
 const MODEL_FALLBACK = [
   'openrouter/free',
@@ -45,22 +46,68 @@ async function initDB() {
     );
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       title TEXT NOT NULL DEFAULT 'Nova conversa',
       pinned BOOLEAN NOT NULL DEFAULT false,
       messages JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT,
+      google_sub TEXT UNIQUE,
+      token TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
   `);
   console.log('Banco de dados pronto.');
 }
 
-// ---------- Senha de acesso ----------
-// Protege todas as rotas /api. Se ACCESS_PASSWORD não estiver configurada, libera geral.
-app.use('/api', (req, res, next) => {
-  if (!ACCESS_PASSWORD) return next();
-  const sent = req.header('x-app-password');
-  if (sent === ACCESS_PASSWORD) return next();
-  res.status(401).json({ error: 'Senha incorreta ou não enviada.' });
+// ---------- Login por usuário ----------
+function newToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+app.post('/api/auth/signup', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password || password.length < 6) {
+    return res.status(400).json({ error: 'E-mail e senha (mín. 6 caracteres) são obrigatórios.' });
+  }
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const id = Date.now().toString();
+    const token = newToken();
+    await pool.query(
+      'INSERT INTO users (id, email, password_hash, token) VALUES ($1, $2, $3, $4)',
+      [id, email.toLowerCase().trim(), hash, token]
+    );
+    res.json({ token, email });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Esse e-mail já tem uma conta.' });
+    res.status(500).json({ error: 'Erro ao criar conta.' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [(email || '').toLowerCase().trim()]);
+  const user = rows[0];
+  if (!user || !user.password_hash) return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+  const ok = await bcrypt.compare(password || '', user.password_hash);
+  if (!ok) return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+  res.json({ token: user.token, email: user.email });
+});
+
+// Protege todas as rotas /api, exceto o cadastro/login.
+app.use('/api', async (req, res, next) => {
+  if (req.path === '/auth/signup' || req.path === '/auth/login') return next();
+  const token = req.header('x-auth-token');
+  if (!token) return res.status(401).json({ error: 'Não autenticado.' });
+  const { rows } = await pool.query('SELECT id, email FROM users WHERE token = $1', [token]);
+  if (!rows.length) return res.status(401).json({ error: 'Sessão inválida.' });
+  req.userId = rows[0].id;
+  next();
 });
 
 // ---------- Chat com fallback automático ----------
@@ -145,11 +192,10 @@ async function studyTopics() {
 // cron.schedule('0 */6 * * *', studyTopics);
 
 // Endpoint para acionar o estudo de fora (ex: cron-job.org, grátis).
-// Protegido pela mesma senha do app, enviada como ?key=SUA_SENHA
+// Protegido por um token de um usuário válido, enviado como ?key=TOKEN
 app.post('/api/study', async (req, res) => {
-  if (ACCESS_PASSWORD && req.query.key !== ACCESS_PASSWORD) {
-    return res.status(401).json({ error: 'Chave incorreta.' });
-  }
+  const { rows } = await pool.query('SELECT id FROM users WHERE token = $1', [req.query.key]);
+  if (!rows.length) return res.status(401).json({ error: 'Chave incorreta.' });
   try {
     await studyTopics();
     res.json({ ok: true });
@@ -170,23 +216,24 @@ app.post('/api/plugins', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Conversas ----------
+// ---------- Conversas (cada usuário só vê as suas) ----------
 app.get('/api/conversations', async (req, res) => {
   const { rows } = await pool.query(
-    'SELECT id, title, pinned, updated_at FROM conversations ORDER BY pinned DESC, updated_at DESC'
+    'SELECT id, title, pinned, updated_at FROM conversations WHERE user_id = $1 ORDER BY pinned DESC, updated_at DESC',
+    [req.userId]
   );
   res.json(rows);
 });
 app.get('/api/conversations/:id', async (req, res) => {
-  const { rows } = await pool.query('SELECT * FROM conversations WHERE id = $1', [req.params.id]);
+  const { rows } = await pool.query('SELECT * FROM conversations WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   if (!rows.length) return res.status(404).json({ error: 'Não encontrada.' });
   res.json(rows[0]);
 });
 app.post('/api/conversations', async (req, res) => {
   const id = Date.now().toString();
   const title = (req.body.title || 'Nova conversa').slice(0, 60);
-  await pool.query('INSERT INTO conversations (id, title, messages) VALUES ($1, $2, $3)', [
-    id, title, JSON.stringify(req.body.messages || []),
+  await pool.query('INSERT INTO conversations (id, user_id, title, messages) VALUES ($1, $2, $3, $4)', [
+    id, req.userId, title, JSON.stringify(req.body.messages || []),
   ]);
   res.json({ id, title, pinned: false, messages: req.body.messages || [] });
 });
@@ -199,12 +246,12 @@ app.put('/api/conversations/:id', async (req, res) => {
   if (pinned !== undefined) { fields.push(`pinned = $${i++}`); values.push(pinned); }
   if (messages !== undefined) { fields.push(`messages = $${i++}`); values.push(JSON.stringify(messages)); }
   fields.push(`updated_at = now()`);
-  values.push(req.params.id);
-  await pool.query(`UPDATE conversations SET ${fields.join(', ')} WHERE id = $${i}`, values);
+  values.push(req.params.id, req.userId);
+  await pool.query(`UPDATE conversations SET ${fields.join(', ')} WHERE id = $${i} AND user_id = $${i + 1}`, values);
   res.json({ ok: true });
 });
 app.delete('/api/conversations/:id', async (req, res) => {
-  await pool.query('DELETE FROM conversations WHERE id = $1', [req.params.id]);
+  await pool.query('DELETE FROM conversations WHERE id = $1 AND user_id = $2', [req.params.id, req.userId]);
   res.json({ ok: true });
 });
 
