@@ -98,6 +98,21 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9e
 .field:focus{outline:none;border-color:var(--blue-line);box-shadow:0 0 0 4px var(--blue-soft)}
 .btn{align-self:flex-start;background:var(--blue);color:#fff;border:none;border-radius:999px;padding:12px 24px;font:600 15px var(--sans);cursor:pointer}
 
+/* gaveta lateral (histórico de conversas) */
+#drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:29;opacity:0;pointer-events:none;transition:opacity .25s}
+#drawer-backdrop.open{opacity:1;pointer-events:auto}
+#drawer{position:fixed;top:0;bottom:0;left:0;width:82%;max-width:320px;background:var(--surface);border-right:1px solid var(--line);z-index:30;transform:translateX(-100%);transition:transform .25s ease;padding:calc(16px + env(safe-area-inset-top,0px)) 16px 16px;display:flex;flex-direction:column;overflow-y:auto}
+#drawer.open{transform:translateX(0)}
+.drawer-head{display:flex;align-items:center;justify-content:space-between;font-family:var(--serif);font-size:20px;margin-bottom:16px}
+.drawer-section{color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px}
+.conv-item{display:flex;align-items:center;gap:8px;padding:10px 10px;border-radius:12px;cursor:pointer}
+.conv-item:hover,.conv-item.active{background:var(--surface-2)}
+.conv-item .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.conv-item button{background:none;border:none;color:var(--muted);padding:4px;cursor:pointer;flex:none}
+.conv-item button svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8}
+.conv-item button.pinned svg{fill:var(--blue);stroke:var(--blue)}
+.drawer-empty{color:var(--muted);font-size:13px;padding:8px 10px}
+
 .tabbar{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:4px;padding:6px;background:rgba(26,27,29,.85);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:20}
 .tab-btn{width:52px;height:44px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--muted);border-radius:999px;cursor:pointer;transition:color .2s,background .2s}
 .tab-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -128,6 +143,9 @@ main{flex:1;min-height:0;padding-bottom:76px}
 
 <div class="app" id="app" style="display:none">
   <header class="topbar">
+    <button id="menu-btn" class="icon-btn" aria-label="Menu">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
     <div class="logo">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 5.7L20 10l-6.2 2.3L12 18l-1.8-5.7L4 10l6.2-2.3z"/></svg>
       Cain
@@ -139,6 +157,19 @@ main{flex:1;min-height:0;padding-bottom:76px}
       </button>
     </div>
   </header>
+
+  <div id="drawer-backdrop"></div>
+  <aside id="drawer">
+    <div class="drawer-head">
+      <span>Conversas</span>
+      <button id="drawer-close" class="icon-btn" aria-label="Fechar">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <button id="drawer-new" class="btn" style="width:100%;margin:0 0 16px">+ Nova conversa</button>
+    <div id="drawer-pinned"></div>
+    <div id="drawer-recent"></div>
+  </aside>
 
   <main>
     <section id="tab-chat" class="tab active">
@@ -326,6 +357,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 let history = [];
 let busy = false;
+let currentConvId = null;
 const log = $('chat-log');
 function scrollDown() { $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; }
 function hideHero() { const h = $('hero'); if (h) h.style.display = 'none'; }
@@ -354,6 +386,21 @@ function addTyping() {
   scrollDown();
   return d;
 }
+async function saveConversation() {
+  try {
+    if (!currentConvId) {
+      const title = history[0] ? history[0].content.slice(0, 48) : 'Nova conversa';
+      const conv = await post('/api/conversations', { title, messages: history });
+      currentConvId = conv.id;
+    } else {
+      await api('/api/conversations/' + currentConvId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: history }),
+      });
+    }
+  } catch (e) { /* silencioso: não trava o chat se falhar ao salvar */ }
+}
 async function sendMessage() {
   const text = $('chat-input').value.trim();
   if (!text || busy) return;
@@ -373,6 +420,7 @@ async function sendMessage() {
     if (data.reply) {
       addBot(data.reply);
       history.push({ role: 'assistant', content: data.reply });
+      saveConversation();
     } else {
       addBot(data.error || 'Sem resposta. Tente de novo em instantes.', true);
     }
@@ -391,12 +439,112 @@ document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () =
   $('chat-input').value = c.dataset.fill;
   $('chat-input').focus();
 }));
-$('new-chat').addEventListener('click', () => {
+function startNewConversation() {
+  currentConvId = null;
   history = [];
   log.querySelectorAll('.msg').forEach(m => m.remove());
   $('hero').style.display = '';
   document.querySelector('.tab-btn[data-tab="chat"]').click();
-});
+}
+$('new-chat').addEventListener('click', startNewConversation);
+$('drawer-new').addEventListener('click', () => { startNewConversation(); closeDrawer(); });
+
+// ---------- Gaveta de conversas ----------
+function openDrawer() {
+  $('drawer').classList.add('open');
+  $('drawer-backdrop').classList.add('open');
+  loadConversations();
+}
+function closeDrawer() {
+  $('drawer').classList.remove('open');
+  $('drawer-backdrop').classList.remove('open');
+}
+$('menu-btn').addEventListener('click', openDrawer);
+$('drawer-close').addEventListener('click', closeDrawer);
+$('drawer-backdrop').addEventListener('click', closeDrawer);
+
+function convItem(c) {
+  const el = document.createElement('div');
+  el.className = 'conv-item' + (c.id === currentConvId ? ' active' : '');
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = c.title;
+  title.addEventListener('click', () => openConversation(c.id));
+  const pinBtn = document.createElement('button');
+  pinBtn.className = c.pinned ? 'pinned' : '';
+  pinBtn.setAttribute('aria-label', 'Fixar');
+  pinBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l2.5 6.5L21 9l-5 4.5 1.5 7L12 17l-5.5 3.5L8 13.5 3 9l6.5-.5z"/></svg>';
+  pinBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    await api('/api/conversations/' + c.id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: !c.pinned }),
+    });
+    loadConversations();
+  });
+  const delBtn = document.createElement('button');
+  delBtn.setAttribute('aria-label', 'Apagar');
+  delBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7"/></svg>';
+  delBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    await api('/api/conversations/' + c.id, { method: 'DELETE' });
+    if (c.id === currentConvId) startNewConversation();
+    loadConversations();
+  });
+  el.appendChild(title);
+  el.appendChild(pinBtn);
+  el.appendChild(delBtn);
+  return el;
+}
+async function loadConversations() {
+  const pinnedEl = $('drawer-pinned');
+  const recentEl = $('drawer-recent');
+  pinnedEl.innerHTML = '';
+  recentEl.innerHTML = '';
+  try {
+    const list = await api('/api/conversations');
+    const pinned = list.filter(c => c.pinned);
+    const recent = list.filter(c => !c.pinned);
+    if (pinned.length) {
+      const h = document.createElement('div');
+      h.className = 'drawer-section';
+      h.textContent = 'Fixadas';
+      pinnedEl.appendChild(h);
+      pinned.forEach(c => pinnedEl.appendChild(convItem(c)));
+    }
+    const h2 = document.createElement('div');
+    h2.className = 'drawer-section';
+    h2.textContent = 'Recentes';
+    recentEl.appendChild(h2);
+    if (!recent.length) {
+      const e = document.createElement('div');
+      e.className = 'drawer-empty';
+      e.textContent = 'Nenhuma conversa ainda.';
+      recentEl.appendChild(e);
+    } else {
+      recent.forEach(c => recentEl.appendChild(convItem(c)));
+    }
+  } catch (e) {
+    recentEl.innerHTML = '<div class="drawer-empty">Não consegui carregar as conversas.</div>';
+  }
+}
+async function openConversation(id) {
+  try {
+    const conv = await api('/api/conversations/' + id);
+    currentConvId = conv.id;
+    history = conv.messages || [];
+    log.querySelectorAll('.msg').forEach(m => m.remove());
+    if (history.length) hideHero(); else $('hero').style.display = '';
+    history.forEach(m => {
+      if (m.role === 'user') addUser(m.content);
+      else addBot(m.content);
+    });
+    closeDrawer();
+    document.querySelector('.tab-btn[data-tab="chat"]').click();
+  } catch (e) { /* ignora */ }
+}
+
 
 async function loadAgents() {
   const list = $('agent-list');
