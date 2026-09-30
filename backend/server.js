@@ -137,6 +137,20 @@ async function studyTopics() {
 // const cron = require('node-cron');
 // cron.schedule('0 */6 * * *', studyTopics);
 
+// Endpoint para acionar o estudo de fora (ex: cron-job.org, grátis).
+// Protegido pela mesma senha do app, enviada como ?key=SUA_SENHA
+app.post('/api/study', async (req, res) => {
+  if (ACCESS_PASSWORD && req.query.key !== ACCESS_PASSWORD) {
+    return res.status(401).json({ error: 'Chave incorreta.' });
+  }
+  try {
+    await studyTopics();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Plugins ----------
 app.get('/api/plugins', async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM plugins ORDER BY name');
