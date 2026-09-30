@@ -1,11 +1,8 @@
-// server.js — backend proxy da sua IA
-// Guarda a chave da OpenRouter no servidor. O frontend nunca vê a chave.
-
+// server.js — backend proxy da sua IA (com banco de dados e senha)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const { Pool } = require('pg');
 
 const app = express();
 app.use(cors());
@@ -13,30 +10,51 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+const ACCESS_PASSWORD = process.env.ACCESS_PASSWORD;
 
-// Ordem de fallback: se o primeiro modelo falhar (erro/limite), tenta o próximo.
-// Todos são gratuitos na OpenRouter no momento em que este código foi escrito —
-// confira em https://openrouter.ai/models?max_price=0 se a lista mudou.
 const MODEL_FALLBACK = [
   'openrouter/free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
 ];
 
-// ---------- Armazenamento simples em arquivo (sem precisar de banco) ----------
-const DB_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR);
+// ---------- Banco de dados ----------
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-function loadJSON(file, fallback) {
-  const p = path.join(DB_DIR, file);
-  if (!fs.existsSync(p)) {
-    fs.writeFileSync(p, JSON.stringify(fallback, null, 2));
-    return fallback;
-  }
-  return JSON.parse(fs.readFileSync(p, 'utf-8'));
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      prompt TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS brain_topics (
+      id TEXT PRIMARY KEY,
+      topic TEXT NOT NULL,
+      last_studied TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS brain_knowledge (
+      id SERIAL PRIMARY KEY,
+      topic TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS plugins (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      endpoint TEXT NOT NULL
+    );
+  `);
+  console.log('Banco de dados pronto.');
 }
-function saveJSON(file, data) {
-  fs.writeFileSync(path.join(DB_DIR, file), JSON.stringify(data, null, 2));
-}
+
+// ---------- Senha de acesso ----------
+// Protege todas as rotas /api. Se ACCESS_PASSWORD não estiver configurada, libera geral.
+app.use('/api', (req, res, next) => {
+  if (!ACCESS_PASSWORD) return next();
+  const sent = req.header('x-app-password');
+  if (sent === ACCESS_PASSWORD) return next();
+  res.status(401).json({ error: 'Senha incorreta ou não enviada.' });
+});
 
 // ---------- Chat com fallback automático ----------
 async function callModel(model, messages) {
@@ -65,78 +83,75 @@ app.post('/api/chat', async (req, res) => {
       return res.json({ reply, modelUsed: model });
     } catch (err) {
       console.warn(err.message);
-      continue; // tenta o próximo modelo da lista
+      continue;
     }
   }
   res.status(500).json({ error: 'Todos os modelos falharam. Tente de novo em instantes.' });
 });
 
-// ---------- Agentes (painel de criação de agentes) ----------
-app.get('/api/agents', (req, res) => {
-  res.json(loadJSON('agents.json', []));
+// ---------- Agentes ----------
+app.get('/api/agents', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM agents ORDER BY name');
+  res.json(rows);
 });
-app.post('/api/agents', (req, res) => {
-  const agents = loadJSON('agents.json', []);
-  const agent = { id: Date.now().toString(), ...req.body };
-  agents.push(agent);
-  saveJSON('agents.json', agents);
-  res.json(agent);
+app.post('/api/agents', async (req, res) => {
+  const id = Date.now().toString();
+  const { name, prompt } = req.body;
+  await pool.query('INSERT INTO agents (id, name, prompt) VALUES ($1, $2, $3)', [id, name, prompt]);
+  res.json({ id, name, prompt });
 });
-app.delete('/api/agents/:id', (req, res) => {
-  let agents = loadJSON('agents.json', []);
-  agents = agents.filter(a => a.id !== req.params.id);
-  saveJSON('agents.json', agents);
+app.delete('/api/agents/:id', async (req, res) => {
+  await pool.query('DELETE FROM agents WHERE id = $1', [req.params.id]);
   res.json({ ok: true });
 });
 
-// ---------- Cérebro (temas de estudo contínuo) ----------
-app.get('/api/brain/topics', (req, res) => {
-  res.json(loadJSON('brain-topics.json', []));
+// ---------- Cérebro ----------
+app.get('/api/brain/topics', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM brain_topics ORDER BY topic');
+  res.json(rows.map(r => ({ id: r.id, topic: r.topic, lastStudied: r.last_studied })));
 });
-app.post('/api/brain/topics', (req, res) => {
-  const topics = loadJSON('brain-topics.json', []);
-  topics.push({ id: Date.now().toString(), topic: req.body.topic, lastStudied: null });
-  saveJSON('brain-topics.json', topics);
+app.post('/api/brain/topics', async (req, res) => {
+  const id = Date.now().toString();
+  await pool.query('INSERT INTO brain_topics (id, topic) VALUES ($1, $2)', [id, req.body.topic]);
   res.json({ ok: true });
 });
-app.get('/api/brain/knowledge', (req, res) => {
-  res.json(loadJSON('brain-knowledge.json', []));
+app.get('/api/brain/knowledge', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM brain_knowledge ORDER BY created_at');
+  res.json(rows.map(r => ({ topic: r.topic, summary: r.summary, date: r.created_at })));
 });
 
-// Roda a cada X horas: para cada tema, pede um resumo atualizado ao modelo
-// e guarda em brain-knowledge.json. Sem acesso à internet o modelo só usa o
-// que já sabe — para pesquisa real na web, plugue uma API de busca aqui
-// (ex: Tavily, Brave Search API) antes de chamar o modelo.
 async function studyTopics() {
-  const topics = loadJSON('brain-topics.json', []);
-  const knowledge = loadJSON('brain-knowledge.json', []);
+  const { rows: topics } = await pool.query('SELECT * FROM brain_topics');
   for (const t of topics) {
     try {
       const summary = await callModel(MODEL_FALLBACK[0], [
         { role: 'user', content: `Me dê um resumo atualizado e didático sobre: ${t.topic}` },
       ]);
-      knowledge.push({ topic: t.topic, summary, date: new Date().toISOString() });
-      t.lastStudied = new Date().toISOString();
+      await pool.query('INSERT INTO brain_knowledge (topic, summary) VALUES ($1, $2)', [t.topic, summary]);
+      await pool.query('UPDATE brain_topics SET last_studied = now() WHERE id = $1', [t.id]);
     } catch (err) {
       console.warn(`Falha ao estudar ${t.topic}:`, err.message);
     }
   }
-  saveJSON('brain-knowledge.json', knowledge);
-  saveJSON('brain-topics.json', topics);
 }
-// Descomente para ativar o estudo automático a cada 6 horas (precisa de node-cron: npm i node-cron)
 // const cron = require('node-cron');
 // cron.schedule('0 */6 * * *', studyTopics);
 
-// ---------- Plugins/Integrações (painel de APIs) ----------
-app.get('/api/plugins', (req, res) => {
-  res.json(loadJSON('plugins.json', []));
+// ---------- Plugins ----------
+app.get('/api/plugins', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM plugins ORDER BY name');
+  res.json(rows);
 });
-app.post('/api/plugins', (req, res) => {
-  const plugins = loadJSON('plugins.json', []);
-  plugins.push({ id: Date.now().toString(), ...req.body });
-  saveJSON('plugins.json', plugins);
+app.post('/api/plugins', async (req, res) => {
+  const id = Date.now().toString();
+  const { name, endpoint } = req.body;
+  await pool.query('INSERT INTO plugins (id, name, endpoint) VALUES ($1, $2, $3)', [id, name, endpoint]);
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+initDB()
+  .then(() => app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`)))
+  .catch(err => {
+    console.error('Erro ao conectar no banco:', err.message);
+    process.exit(1);
+  });
