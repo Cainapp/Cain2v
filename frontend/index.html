@@ -56,6 +56,9 @@ main{flex:1;min-height:0}
 .msg.bot .avatar{flex:none;width:28px;height:28px;border-radius:50%;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center;margin-top:1px}
 .msg.bot .avatar svg{width:14px;height:14px;fill:currentColor}
 .msg.bot .text{min-width:0;white-space:pre-wrap;word-break:break-word}
+.img-bubble{max-width:100%;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--surface-2)}
+.img-bubble img{display:block;width:100%;height:auto}
+.img-caption{color:var(--muted);font-size:13px;margin-top:6px}
 .msg.bot.error .text{color:#e6a1a1}
 code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9em}
 .dots{display:inline-flex;gap:5px;padding:9px 0}
@@ -182,6 +185,7 @@ main{flex:1;min-height:0;padding-bottom:76px}
               <button class="chip" data-fill="Resuma para mim: ">Resumir um tema</button>
               <button class="chip" data-fill="Crie 5 ideias de posts sobre ">Ideias de posts</button>
               <button class="chip" data-fill="Explique de forma simples: ">Explicar algo</button>
+              <button class="chip" data-fill="/imagem ">Gerar imagem</button>
             </div>
           </div>
         </div>
@@ -258,7 +262,7 @@ main{flex:1;min-height:0;padding-bottom:76px}
 </div>
 
 <script>
-const API_URL = 'https://cain-backend-hxgb.onrender.com';
+const API_URL = 'https://cain-api.onrender.com';
 const $ = id => document.getElementById(id);
 const SPARK = '<svg viewBox="0 0 24 24"><path d="M12 2l1.8 5.7L20 10l-6.2 2.3L12 18l-1.8-5.7L4 10l6.2-2.3z"/></svg>';
 
@@ -378,6 +382,32 @@ function addBot(text, isError) {
   log.appendChild(d);
   scrollDown();
 }
+function addImage(url, prompt) {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  const wrap = document.createElement('div');
+  wrap.className = 'text';
+  const box = document.createElement('div');
+  box.className = 'img-bubble';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = prompt;
+  img.loading = 'lazy';
+  box.appendChild(img);
+  wrap.innerHTML = '';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.innerHTML = SPARK;
+  d.appendChild(avatar);
+  wrap.appendChild(box);
+  const cap = document.createElement('div');
+  cap.className = 'img-caption';
+  cap.textContent = prompt;
+  wrap.appendChild(cap);
+  d.appendChild(wrap);
+  log.appendChild(d);
+  scrollDown();
+}
 function addTyping() {
   const d = document.createElement('div');
   d.className = 'msg bot';
@@ -401,12 +431,48 @@ async function saveConversation() {
     }
   } catch (e) { /* silencioso: não trava o chat se falhar ao salvar */ }
 }
+function buildImageUrl(prompt) {
+  const seed = Math.floor(Math.random() * 1e9);
+  const q = encodeURIComponent(prompt);
+  return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed=${seed}`;
+}
 async function sendMessage() {
-  const text = $('chat-input').value.trim();
-  if (!text || busy) return;
+  const raw = $('chat-input').value.trim();
+  if (!raw || busy) return;
   busy = true;
   $('send-btn').disabled = true;
   hideHero();
+
+  const imageMatch = raw.match(/^\/imagem\s+(.+)/i);
+  if (imageMatch) {
+    const prompt = imageMatch[1];
+    addUser(raw);
+    history.push({ role: 'user', content: raw });
+    $('chat-input').value = '';
+    const typing = addTyping();
+    typing.querySelector('.note').classList.add('show');
+    typing.querySelector('.note').textContent = 'Gerando imagem em alta qualidade...';
+    const url = buildImageUrl(prompt);
+    const img = new Image();
+    img.onload = () => {
+      typing.remove();
+      addImage(url, prompt);
+      history.push({ role: 'assistant', content: `[Imagem gerada: ${prompt}]` });
+      saveConversation();
+      busy = false;
+      $('send-btn').disabled = false;
+    };
+    img.onerror = () => {
+      typing.remove();
+      addBot('Não consegui gerar a imagem agora. Tente de novo.', true);
+      busy = false;
+      $('send-btn').disabled = false;
+    };
+    img.src = url;
+    return;
+  }
+
+  const text = raw;
   addUser(text);
   history.push({ role: 'user', content: text });
   $('chat-input').value = '';
