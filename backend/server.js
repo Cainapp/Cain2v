@@ -43,6 +43,13 @@ async function initDB() {
       name TEXT NOT NULL,
       endpoint TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'Nova conversa',
+      pinned BOOLEAN NOT NULL DEFAULT false,
+      messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
   console.log('Banco de dados pronto.');
 }
@@ -160,6 +167,44 @@ app.post('/api/plugins', async (req, res) => {
   const id = Date.now().toString();
   const { name, endpoint } = req.body;
   await pool.query('INSERT INTO plugins (id, name, endpoint) VALUES ($1, $2, $3)', [id, name, endpoint]);
+  res.json({ ok: true });
+});
+
+// ---------- Conversas ----------
+app.get('/api/conversations', async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id, title, pinned, updated_at FROM conversations ORDER BY pinned DESC, updated_at DESC'
+  );
+  res.json(rows);
+});
+app.get('/api/conversations/:id', async (req, res) => {
+  const { rows } = await pool.query('SELECT * FROM conversations WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Não encontrada.' });
+  res.json(rows[0]);
+});
+app.post('/api/conversations', async (req, res) => {
+  const id = Date.now().toString();
+  const title = (req.body.title || 'Nova conversa').slice(0, 60);
+  await pool.query('INSERT INTO conversations (id, title, messages) VALUES ($1, $2, $3)', [
+    id, title, JSON.stringify(req.body.messages || []),
+  ]);
+  res.json({ id, title, pinned: false, messages: req.body.messages || [] });
+});
+app.put('/api/conversations/:id', async (req, res) => {
+  const { title, pinned, messages } = req.body;
+  const fields = [];
+  const values = [];
+  let i = 1;
+  if (title !== undefined) { fields.push(`title = $${i++}`); values.push(title.slice(0, 60)); }
+  if (pinned !== undefined) { fields.push(`pinned = $${i++}`); values.push(pinned); }
+  if (messages !== undefined) { fields.push(`messages = $${i++}`); values.push(JSON.stringify(messages)); }
+  fields.push(`updated_at = now()`);
+  values.push(req.params.id);
+  await pool.query(`UPDATE conversations SET ${fields.join(', ')} WHERE id = $${i}`, values);
+  res.json({ ok: true });
+});
+app.delete('/api/conversations/:id', async (req, res) => {
+  await pool.query('DELETE FROM conversations WHERE id = $1', [req.params.id]);
   res.json({ ok: true });
 });
 
