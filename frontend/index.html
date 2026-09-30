@@ -58,6 +58,9 @@ main{flex:1;min-height:0}
 .msg.bot .text{min-width:0;white-space:pre-wrap;word-break:break-word}
 .img-bubble{max-width:100%;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--surface-2)}
 .img-bubble img{display:block;width:100%;height:auto}
+.img-bubble.img-skeleton{aspect-ratio:1/1;position:relative;background:var(--surface-2)}
+.img-skeleton .shimmer{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(1,130,198,.18) 50%,transparent 70%);background-size:200% 100%;animation:shimmer 1.4s infinite}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .img-caption{color:var(--muted);font-size:13px;margin-top:6px}
 .msg.bot.error .text{color:#e6a1a1}
 code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9em}
@@ -116,18 +119,25 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9e
 .conv-item button.pinned svg{fill:var(--blue);stroke:var(--blue)}
 .drawer-empty{color:var(--muted);font-size:13px;padding:8px 10px}
 
-.tabbar{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:4px;padding:6px;background:rgba(26,27,29,.85);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:20}
-.tab-btn{width:52px;height:44px;display:flex;align-items:center;justify-content:center;background:none;border:none;color:var(--muted);border-radius:999px;cursor:pointer;transition:color .2s,background .2s}
-.tab-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.tab-btn.active{color:#fff;background:var(--blue)}
-main{flex:1;min-height:0;padding-bottom:76px}
+.drawer-nav{display:flex;flex-direction:column;gap:2px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.nav-btn{display:flex;align-items:center;gap:12px;background:none;border:none;color:var(--muted);border-radius:12px;padding:10px 10px;cursor:pointer;font:500 14px var(--sans);text-align:left}
+.nav-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7;flex:none}
+.nav-btn:hover{background:var(--surface-2)}
+.nav-btn.active{color:var(--blue);background:var(--surface-2)}
+main{flex:1;min-height:0}
 
 /* tela de senha */
-#lock-screen{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;z-index:50}
-#lock-screen .logo{font-size:26px}
+#lock-screen{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;z-index:50}
+#lock-screen .logo{font-size:26px;margin-bottom:6px}
 #lock-screen p{color:var(--muted);font-size:14px;margin:0;text-align:center}
-#lock-form{display:flex;gap:8px;width:100%;max-width:320px}
-#lock-error{color:#e6a1a1;font-size:13px;min-height:18px}
+#auth-tabs{display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px;width:100%;max-width:320px}
+.auth-tab{flex:1;background:none;border:none;color:var(--muted);border-radius:999px;padding:9px 0;font:600 14px var(--sans);cursor:pointer}
+.auth-tab.active{background:var(--blue);color:#fff}
+#lock-form{display:flex;flex-direction:column;gap:8px;width:100%;max-width:320px}
+#lock-error{color:#e6a1a1;font-size:13px;min-height:18px;text-align:center}
+.auth-divider{display:flex;align-items:center;gap:10px;width:100%;max-width:320px;color:var(--muted);font-size:12px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--line)}
+.btn.google{align-self:stretch;background:var(--surface);color:var(--text);border:1px solid var(--line);text-align:center}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -136,12 +146,18 @@ main{flex:1;min-height:0;padding-bottom:76px}
 
 <div id="lock-screen">
   <div class="logo">✦ Cain</div>
-  <p>Digite a senha de acesso.</p>
+  <div id="auth-tabs">
+    <button type="button" class="auth-tab active" data-mode="login">Entrar</button>
+    <button type="button" class="auth-tab" data-mode="signup">Criar conta</button>
+  </div>
   <form id="lock-form">
-    <input id="lock-input" class="field" type="password" placeholder="Senha" autocomplete="current-password" style="margin:0">
-    <button type="submit" class="btn" style="align-self:auto">Entrar</button>
+    <input id="auth-email" class="field" type="email" placeholder="E-mail" autocomplete="username" style="margin:0">
+    <input id="auth-password" class="field" type="password" placeholder="Senha" autocomplete="current-password" style="margin:0">
+    <button type="submit" class="btn" style="align-self:stretch;text-align:center">Entrar</button>
   </form>
   <div id="lock-error"></div>
+  <div class="auth-divider"><span>ou</span></div>
+  <button type="button" id="google-btn" class="btn google">Continuar com Google</button>
 </div>
 
 <div class="app" id="app" style="display:none">
@@ -164,12 +180,26 @@ main{flex:1;min-height:0;padding-bottom:76px}
   <div id="drawer-backdrop"></div>
   <aside id="drawer">
     <div class="drawer-head">
-      <span>Conversas</span>
+      <span>Cain</span>
       <button id="drawer-close" class="icon-btn" aria-label="Fechar">
         <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
-    <button id="drawer-new" class="btn" style="width:100%;margin:0 0 16px">+ Nova conversa</button>
+    <nav class="drawer-nav">
+      <button class="nav-btn active" data-tab="chat">
+        <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Conversa
+      </button>
+      <button class="nav-btn" data-tab="agentes">
+        <svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V5"/><circle cx="12" cy="4" r="1"/><circle cx="9" cy="13.5" r="1"/><circle cx="15" cy="13.5" r="1"/></svg>Agentes
+      </button>
+      <button class="nav-btn" data-tab="cerebro">
+        <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>Cérebro
+      </button>
+      <button class="nav-btn" data-tab="plugins">
+        <svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8zM12 17v4"/></svg>Plugins
+      </button>
+    </nav>
+    <button id="drawer-new" class="btn" style="width:100%;margin:4px 0 16px">+ Nova conversa</button>
     <div id="drawer-pinned"></div>
     <div id="drawer-recent"></div>
   </aside>
@@ -185,7 +215,7 @@ main{flex:1;min-height:0;padding-bottom:76px}
               <button class="chip" data-fill="Resuma para mim: ">Resumir um tema</button>
               <button class="chip" data-fill="Crie 5 ideias de posts sobre ">Ideias de posts</button>
               <button class="chip" data-fill="Explique de forma simples: ">Explicar algo</button>
-              <button class="chip" data-fill="/imagem ">Gerar imagem</button>
+              <button class="chip" data-fill="Crie uma imagem de ">Gerar imagem</button>
             </div>
           </div>
         </div>
@@ -244,21 +274,6 @@ main{flex:1;min-height:0;padding-bottom:76px}
       </div></div>
     </section>
   </main>
-
-  <nav class="tabbar">
-    <button class="tab-btn active" data-tab="chat" aria-label="Conversa">
-      <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>
-    </button>
-    <button class="tab-btn" data-tab="agentes" aria-label="Agentes">
-      <svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V5"/><circle cx="12" cy="4" r="1"/><circle cx="9" cy="13.5" r="1"/><circle cx="15" cy="13.5" r="1"/></svg>
-    </button>
-    <button class="tab-btn" data-tab="cerebro" aria-label="Cérebro">
-      <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
-    </button>
-    <button class="tab-btn" data-tab="plugins" aria-label="Plugins">
-      <svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8zM12 17v4"/></svg>
-    </button>
-  </nav>
 </div>
 
 <script>
@@ -273,39 +288,58 @@ if (window.caches) {
   caches.keys().then(ks => ks.forEach(k => caches.delete(k)));
 }
 
-// ---------- Senha ----------
-let APP_PASSWORD = localStorage.getItem('novaia_password') || '';
+// ---------- Login ----------
+let AUTH_TOKEN = localStorage.getItem('cain_token') || '';
+let authMode = 'login';
 
 function showApp() {
   $('lock-screen').style.display = 'none';
   $('app').style.display = 'flex';
   loadAgents();
 }
-async function tryPassword(pwd) {
-  const res = await fetch(API_URL + '/api/agents', { headers: { 'x-app-password': pwd } });
+async function checkToken(token) {
+  const res = await fetch(API_URL + '/api/conversations', { headers: { 'x-auth-token': token } });
   return res.status !== 401;
 }
+document.querySelectorAll('.auth-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    authMode = btn.dataset.mode;
+    document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $('lock-form').querySelector('button[type="submit"]').textContent = authMode === 'login' ? 'Entrar' : 'Criar conta';
+    $('lock-error').textContent = '';
+  });
+});
 $('lock-form').addEventListener('submit', async e => {
   e.preventDefault();
-  const pwd = $('lock-input').value;
+  const email = $('auth-email').value.trim();
+  const password = $('auth-password').value;
   $('lock-error').textContent = 'Verificando...';
-  const ok = await tryPassword(pwd).catch(() => null);
-  if (ok === null) {
+  try {
+    const res = await fetch(API_URL + '/api/auth/' + authMode, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      $('lock-error').textContent = data.error || 'Não foi possível continuar.';
+      return;
+    }
+    AUTH_TOKEN = data.token;
+    localStorage.setItem('cain_token', AUTH_TOKEN);
+    $('lock-error').textContent = '';
+    showApp();
+  } catch (e) {
     $('lock-error').textContent = 'Não consegui falar com o servidor. Tente de novo.';
-    return;
   }
-  if (!ok) {
-    $('lock-error').textContent = 'Senha incorreta.';
-    return;
-  }
-  APP_PASSWORD = pwd;
-  localStorage.setItem('novaia_password', pwd);
-  $('lock-error').textContent = '';
-  showApp();
+});
+$('google-btn').addEventListener('click', () => {
+  $('lock-error').textContent = 'Login com Google ainda não foi configurado neste app.';
 });
 (async () => {
-  if (APP_PASSWORD) {
-    const ok = await tryPassword(APP_PASSWORD).catch(() => null);
+  if (AUTH_TOKEN) {
+    const ok = await checkToken(AUTH_TOKEN).catch(() => null);
     if (ok) return showApp();
   }
   $('lock-screen').style.display = 'flex';
@@ -313,10 +347,10 @@ $('lock-form').addEventListener('submit', async e => {
 
 // ---------- API ----------
 async function api(path, options = {}) {
-  options.headers = Object.assign({ 'x-app-password': APP_PASSWORD }, options.headers || {});
+  options.headers = Object.assign({ 'x-auth-token': AUTH_TOKEN }, options.headers || {});
   const res = await fetch(API_URL + path, options);
   if (res.status === 401) {
-    localStorage.removeItem('novaia_password');
+    localStorage.removeItem('cain_token');
     location.reload();
     throw new Error('Sessão expirada.');
   }
@@ -347,15 +381,16 @@ function emptyState(list, text) {
   list.appendChild(d);
 }
 
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     $('tab-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'agentes') loadAgents();
     if (btn.dataset.tab === 'cerebro') loadBrain();
     if (btn.dataset.tab === 'plugins') loadPlugins();
+    closeDrawer();
   });
 });
 
@@ -385,6 +420,9 @@ function addBot(text, isError) {
 function addImage(url, prompt) {
   const d = document.createElement('div');
   d.className = 'msg bot';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.innerHTML = SPARK;
   const wrap = document.createElement('div');
   wrap.className = 'text';
   const box = document.createElement('div');
@@ -394,19 +432,28 @@ function addImage(url, prompt) {
   img.alt = prompt;
   img.loading = 'lazy';
   box.appendChild(img);
-  wrap.innerHTML = '';
-  const avatar = document.createElement('div');
-  avatar.className = 'avatar';
-  avatar.innerHTML = SPARK;
-  d.appendChild(avatar);
   wrap.appendChild(box);
   const cap = document.createElement('div');
   cap.className = 'img-caption';
   cap.textContent = prompt;
   wrap.appendChild(cap);
+  d.appendChild(avatar);
   d.appendChild(wrap);
   log.appendChild(d);
   scrollDown();
+}
+function addImageLoading(prompt) {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  d.innerHTML =
+    '<div class="avatar">' + SPARK + '</div>' +
+    '<div class="text">' +
+      '<div class="img-bubble img-skeleton"><div class="shimmer"></div></div>' +
+      '<div class="img-caption">Criando imagem: ' + esc(prompt) + '</div>' +
+    '</div>';
+  log.appendChild(d);
+  scrollDown();
+  return d;
 }
 function addTyping() {
   const d = document.createElement('div');
@@ -419,7 +466,8 @@ function addTyping() {
 async function saveConversation() {
   try {
     if (!currentConvId) {
-      const title = history[0] ? history[0].content.slice(0, 48) : 'Nova conversa';
+      const firstText = history.find(m => m.type !== 'image');
+      const title = firstText ? firstText.content.slice(0, 48) : (history[0] ? 'Imagem: ' + history[0].prompt.slice(0, 40) : 'Nova conversa');
       const conv = await post('/api/conversations', { title, messages: history });
       currentConvId = conv.id;
     } else {
@@ -436,6 +484,20 @@ function buildImageUrl(prompt) {
   const q = encodeURIComponent(prompt);
   return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed=${seed}`;
 }
+// Detecta pedidos de imagem em linguagem natural, sem precisar de um comando.
+function extractImagePrompt(text) {
+  const patterns = [
+    /^\/imagem\s+(.+)/i,
+    /^(?:crie?|gere?|desenhe?|fa[çc]a|monte)\s+(?:pra mim\s+)?(?:uma?\s+)?imagem\s+(?:de|do|da|com|sobre)\s+(.+)/i,
+    /^(?:crie?|gere?|desenhe?|fa[çc]a)\s+(?:uma?\s+)?(?:foto|ilustra[çc][ãa]o|desenho|arte)\s+(?:de|do|da|com|sobre)\s+(.+)/i,
+    /^imagem\s+de\s+(.+)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return m[1].trim();
+  }
+  return null;
+}
 async function sendMessage() {
   const raw = $('chat-input').value.trim();
   if (!raw || busy) return;
@@ -443,27 +505,24 @@ async function sendMessage() {
   $('send-btn').disabled = true;
   hideHero();
 
-  const imageMatch = raw.match(/^\/imagem\s+(.+)/i);
-  if (imageMatch) {
-    const prompt = imageMatch[1];
+  const imagePrompt = extractImagePrompt(raw);
+  if (imagePrompt) {
     addUser(raw);
     history.push({ role: 'user', content: raw });
     $('chat-input').value = '';
-    const typing = addTyping();
-    typing.querySelector('.note').classList.add('show');
-    typing.querySelector('.note').textContent = 'Gerando imagem em alta qualidade...';
-    const url = buildImageUrl(prompt);
+    const loadingCard = addImageLoading(imagePrompt);
+    const url = buildImageUrl(imagePrompt);
     const img = new Image();
     img.onload = () => {
-      typing.remove();
-      addImage(url, prompt);
-      history.push({ role: 'assistant', content: `[Imagem gerada: ${prompt}]` });
+      loadingCard.remove();
+      addImage(url, imagePrompt);
+      history.push({ role: 'assistant', type: 'image', content: url, prompt: imagePrompt });
       saveConversation();
       busy = false;
       $('send-btn').disabled = false;
     };
     img.onerror = () => {
-      typing.remove();
+      loadingCard.remove();
       addBot('Não consegui gerar a imagem agora. Tente de novo.', true);
       busy = false;
       $('send-btn').disabled = false;
@@ -480,8 +539,12 @@ async function sendMessage() {
   const slow = setTimeout(() => typing.querySelector('.note').classList.add('show'), 7000);
   const opt = $('agent-select').selectedOptions[0];
   const agentPrompt = opt && opt.dataset.prompt ? opt.dataset.prompt : null;
+  // O modelo de texto não deve receber as imagens como se fossem texto normal.
+  const messagesForModel = history.map(m =>
+    m.type === 'image' ? { role: m.role, content: `[Imagem gerada: ${m.prompt}]` } : m
+  );
   try {
-    const data = await post('/api/chat', { messages: history, agentSystemPrompt: agentPrompt });
+    const data = await post('/api/chat', { messages: messagesForModel, agentSystemPrompt: agentPrompt });
     typing.remove();
     if (data.reply) {
       addBot(data.reply);
@@ -510,7 +573,7 @@ function startNewConversation() {
   history = [];
   log.querySelectorAll('.msg').forEach(m => m.remove());
   $('hero').style.display = '';
-  document.querySelector('.tab-btn[data-tab="chat"]').click();
+  document.querySelector('.nav-btn[data-tab="chat"]').click();
 }
 $('new-chat').addEventListener('click', startNewConversation);
 $('drawer-new').addEventListener('click', () => { startNewConversation(); closeDrawer(); });
@@ -604,10 +667,11 @@ async function openConversation(id) {
     if (history.length) hideHero(); else $('hero').style.display = '';
     history.forEach(m => {
       if (m.role === 'user') addUser(m.content);
+      else if (m.type === 'image') addImage(m.content, m.prompt);
       else addBot(m.content);
     });
     closeDrawer();
-    document.querySelector('.tab-btn[data-tab="chat"]').click();
+    document.querySelector('.nav-btn[data-tab="chat"]').click();
   } catch (e) { /* ignora */ }
 }
 
