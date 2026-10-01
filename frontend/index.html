@@ -566,12 +566,20 @@ async function sendMessage() {
   const slow = setTimeout(() => typing.querySelector('.note').classList.add('show'), 7000);
   const opt = $('agent-select').selectedOptions[0];
   const agentPrompt = opt && opt.dataset.prompt ? opt.dataset.prompt : null;
-  // O modelo de texto não deve receber as imagens como se fossem texto normal.
+  // O modelo de texto não deve receber as imagens como se fossem texto normal,
+  // mas precisa saber que elas foram geradas de verdade por outra ferramenta do app.
+  const temImagem = history.some(m => m.type === 'image');
   const messagesForModel = history.map(m =>
     m.type === 'image' ? { role: m.role, content: `[Imagem gerada: ${m.prompt}]` } : m
   );
+  const avisoImagem = temImagem
+    ? 'Importante: este app tem uma ferramenta separada de geração de imagens. Mensagens marcadas como "[Imagem gerada: ...]" indicam que uma imagem REAL já foi criada e mostrada ao usuário por essa ferramenta — você mesmo não a gera, mas ela existe de verdade. Nunca diga que não é possível gerar imagens ou que isso foi só uma descrição textual; se o usuário reclamar do resultado, ajude a melhorar a descrição do pedido.'
+    : null;
+  const finalAgentPrompt = avisoImagem
+    ? (agentPrompt ? `${agentPrompt}\n\n${avisoImagem}` : avisoImagem)
+    : agentPrompt;
   try {
-    const data = await post('/api/chat', { messages: messagesForModel, agentSystemPrompt: agentPrompt });
+    const data = await post('/api/chat', { messages: messagesForModel, agentSystemPrompt: finalAgentPrompt });
     typing.remove();
     if (data.reply) {
       addBot(data.reply);
