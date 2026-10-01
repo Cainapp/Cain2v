@@ -61,6 +61,9 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  // Migração: a tabela conversations pode já existir de uma versão anterior
+  // (sem user_id), e CREATE TABLE IF NOT EXISTS não adiciona colunas novas.
+  await pool.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id TEXT;`);
   console.log('Banco de dados pronto.');
 }
 
@@ -141,6 +144,39 @@ app.post('/api/chat', async (req, res) => {
     }
   }
   res.status(500).json({ error: 'Todos os modelos falharam. Tente de novo em instantes.' });
+});
+
+// ---------- Geração de imagem (Gemini "Nano Banana", grátis via OpenRouter) ----------
+app.post('/api/generate-image', async (req, res) => {
+  const { prompt } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'Faltou a descrição da imagem.' });
+  try {
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-image-preview:free',
+        modalities: ['image', 'text'],
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!r.ok) throw new Error(`Nano Banana falhou: ${r.status}`);
+    const data = await r.json();
+    const msg = data.choices && data.choices[0] && data.choices[0].message;
+    // A imagem pode vir em formatos ligeiramente diferentes dependendo da versão da API.
+    let imageUrl =
+      (msg && msg.images && msg.images[0] && (msg.images[0].image_url?.url || msg.images[0].url)) ||
+      (Array.isArray(msg?.content) && msg.content.find(c => c.type === 'image_url')?.image_url?.url) ||
+      null;
+    if (!imageUrl) throw new Error('Nenhuma imagem retornada.');
+    res.json({ imageUrl, provider: 'nano-banana' });
+  } catch (err) {
+    console.warn('generate-image:', err.message);
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // ---------- Agentes ----------
