@@ -156,8 +156,6 @@ main{flex:1;min-height:0}
     <button type="submit" class="btn" style="align-self:stretch;text-align:center">Entrar</button>
   </form>
   <div id="lock-error"></div>
-  <div class="auth-divider"><span>ou</span></div>
-  <button type="button" id="google-btn" class="btn google">Continuar com Google</button>
 </div>
 
 <div class="app" id="app" style="display:none">
@@ -334,9 +332,6 @@ $('lock-form').addEventListener('submit', async e => {
     $('lock-error').textContent = 'Não consegui falar com o servidor. Tente de novo.';
   }
 });
-$('google-btn').addEventListener('click', () => {
-  $('lock-error').textContent = 'Login com Google ainda não foi configurado neste app.';
-});
 (async () => {
   if (AUTH_TOKEN) {
     const ok = await checkToken(AUTH_TOKEN).catch(() => null);
@@ -479,10 +474,31 @@ async function saveConversation() {
     }
   } catch (e) { /* silencioso: não trava o chat se falhar ao salvar */ }
 }
-function buildImageUrl(prompt) {
+function buildPollinationsUrl(prompt) {
   const seed = Math.floor(Math.random() * 1e9);
   const q = encodeURIComponent(prompt);
   return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed=${seed}`;
+}
+function preloadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(url);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+// Tenta o Nano Banana (Gemini, alta qualidade) primeiro; se falhar, usa o Pollinations como reserva.
+async function generateImage(prompt) {
+  try {
+    const data = await post('/api/generate-image', { prompt });
+    if (data.imageUrl) {
+      await preloadImage(data.imageUrl);
+      return data.imageUrl;
+    }
+  } catch (e) { /* cai pro Pollinations */ }
+  const url = buildPollinationsUrl(prompt);
+  await preloadImage(url);
+  return url;
 }
 // Detecta pedidos de imagem em linguagem natural, sem precisar de um comando.
 function extractImagePrompt(text) {
@@ -511,23 +527,19 @@ async function sendMessage() {
     history.push({ role: 'user', content: raw });
     $('chat-input').value = '';
     const loadingCard = addImageLoading(imagePrompt);
-    const url = buildImageUrl(imagePrompt);
-    const img = new Image();
-    img.onload = () => {
+    try {
+      const url = await generateImage(imagePrompt);
       loadingCard.remove();
       addImage(url, imagePrompt);
       history.push({ role: 'assistant', type: 'image', content: url, prompt: imagePrompt });
       saveConversation();
-      busy = false;
-      $('send-btn').disabled = false;
-    };
-    img.onerror = () => {
+    } catch (e) {
       loadingCard.remove();
       addBot('Não consegui gerar a imagem agora. Tente de novo.', true);
+    } finally {
       busy = false;
       $('send-btn').disabled = false;
-    };
-    img.src = url;
+    }
     return;
   }
 
