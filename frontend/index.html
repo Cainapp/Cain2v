@@ -81,6 +81,15 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9e
 .send{width:42px;height:42px;flex:none;border-radius:50%;border:none;background:var(--blue);color:#fff;display:grid;place-items:center;cursor:pointer;transition:opacity .2s}
 .send:disabled{opacity:.4}
 .send svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+#mic-btn{width:36px;height:36px;flex:none;border-radius:50%;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+#mic-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8}
+#mic-btn.recording{color:#fff;background:#d64545}
+#mic-btn.recording svg{animation:pulse 1s infinite}
+.mic-hint{display:none;text-align:center;color:var(--muted);font-size:12px;padding-bottom:6px}
+.mic-hint.show{display:block}
+.code-block{background:#0d0e10;border:1px solid var(--line);border-radius:12px;margin:10px 0;overflow:hidden}
+.code-block .copy-code-btn{display:block;margin-left:auto;background:var(--surface-2);color:var(--text);border:none;border-bottom:1px solid var(--line);padding:6px 14px;font:600 12px var(--sans);cursor:pointer}
+.code-block pre{margin:0;padding:14px;overflow-x:auto;font:13px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
 
 .page-title{font-family:var(--serif);font-weight:400;font-size:30px;letter-spacing:-.01em;margin:14px 0 4px}
 .page-sub{color:var(--muted);margin:0 0 20px;font-size:14px;max-width:44ch}
@@ -222,12 +231,16 @@ main{flex:1;min-height:0}
         <div class="wrap">
           <div class="composer">
             <input id="chat-input" type="text" placeholder="Escreva sua mensagem" autocomplete="off">
+            <button id="mic-btn" class="icon-btn" aria-label="Ditar mensagem" style="background:none;border:none">
+              <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 19v3"/></svg>
+            </button>
             <button id="send-btn" class="send" aria-label="Enviar">
               <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             </button>
           </div>
         </div>
       </div>
+      <div id="mic-hint" class="mic-hint">Ouvindo... fale agora</div>
     </section>
 
     <section id="tab-agentes" class="tab">
@@ -362,7 +375,19 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function fmt(s) {
-  return esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  const blocks = [];
+  let text = s.replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, (m, code) => {
+    blocks.push(code.trim());
+    return `\u0000${blocks.length - 1}\u0000`;
+  });
+  text = esc(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  text = text.replace(/\u0000(\d+)\u0000/g, (m, i) => {
+    const code = blocks[parseInt(i, 10)];
+    const id = 'cb_' + Math.random().toString(36).slice(2) + Date.now();
+    window.__codeBlocks[id] = code;
+    return `<div class="code-block"><button class="copy-code-btn" data-id="${id}">Copiar</button><pre>${esc(code)}</pre></div>`;
+  });
+  return text;
 }
 function fmtDate(iso) {
   if (!iso) return 'ainda não estudado';
@@ -474,11 +499,6 @@ async function saveConversation() {
     }
   } catch (e) { /* silencioso: não trava o chat se falhar ao salvar */ }
 }
-function buildPollinationsUrl(prompt) {
-  const seed = Math.floor(Math.random() * 1e9);
-  const q = encodeURIComponent(prompt);
-  return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
-}
 function preloadImage(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -487,18 +507,15 @@ function preloadImage(url) {
     img.src = url;
   });
 }
-// Tenta o Nano Banana (Gemini, alta qualidade) primeiro; se falhar, usa o Pollinations como reserva.
+// O backend decide o provedor (Cloudflare FLUX primeiro, Pollinations como reserva).
 async function generateImage(prompt) {
-  try {
-    const data = await post('/api/generate-image', { prompt });
-    if (data.imageUrl) {
-      await preloadImage(data.imageUrl);
-      return data.imageUrl;
-    }
-  } catch (e) { /* cai pro Pollinations */ }
-  const url = buildPollinationsUrl(prompt);
-  await preloadImage(url);
-  return url;
+  const data = await post('/api/generate-image', { prompt });
+  if (data.error === 'LIMITE_DIARIO') {
+    throw new Error(data.message);
+  }
+  if (!data.imageUrl) throw new Error(data.error || 'Não consegui gerar a imagem agora.');
+  await preloadImage(data.imageUrl);
+  return data.imageUrl;
 }
 // Detecta pedidos de imagem em linguagem natural, sem precisar de um comando.
 // Mais flexível: basta ter um verbo de criação + uma palavra de imagem em qualquer ordem.
@@ -533,7 +550,7 @@ async function sendMessage() {
       saveConversation();
     } catch (e) {
       loadingCard.remove();
-      addBot('Não consegui gerar a imagem agora. Tente de novo.', true);
+      addBot(e.message || 'Não consegui gerar a imagem agora. Tente de novo.', true);
     } finally {
       busy = false;
       $('send-btn').disabled = false;
@@ -573,6 +590,55 @@ async function sendMessage() {
   }
 }
 $('send-btn').addEventListener('click', sendMessage);
+
+// ---------- Ditar mensagem por voz (grátis, direto no navegador) ----------
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRecognitionAPI) {
+  const recognition = new SpeechRecognitionAPI();
+  recognition.lang = 'pt-BR';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  let listening = false;
+
+  recognition.addEventListener('result', e => {
+    const transcript = e.results[0][0].transcript;
+    const input = $('chat-input');
+    input.value = (input.value ? input.value + ' ' : '') + transcript;
+    input.focus();
+  });
+  recognition.addEventListener('end', () => {
+    listening = false;
+    $('mic-btn').classList.remove('recording');
+    $('mic-hint').classList.remove('show');
+  });
+  recognition.addEventListener('error', () => {
+    listening = false;
+    $('mic-btn').classList.remove('recording');
+    $('mic-hint').classList.remove('show');
+  });
+  $('mic-btn').addEventListener('click', () => {
+    if (listening) { recognition.stop(); return; }
+    listening = true;
+    $('mic-btn').classList.add('recording');
+    $('mic-hint').classList.add('show');
+    try { recognition.start(); } catch (e) { /* já estava rodando */ }
+  });
+} else {
+  $('mic-btn').style.display = 'none';
+}
+
+// ---------- Botão de copiar em blocos de código que o Cain gerar ----------
+window.__codeBlocks = {};
+log.addEventListener('click', e => {
+  const btn = e.target.closest('.copy-code-btn');
+  if (!btn) return;
+  const code = window.__codeBlocks[btn.dataset.id] || '';
+  navigator.clipboard.writeText(code).then(() => {
+    const old = btn.textContent;
+    btn.textContent = 'Copiado!';
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  });
+});
 $('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
 document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
   $('chat-input').value = c.dataset.fill;
