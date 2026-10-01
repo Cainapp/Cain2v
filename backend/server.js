@@ -147,40 +147,56 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // ---------- Geração de imagem (Gemini "Nano Banana", grátis via OpenRouter) ----------
+const CF_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+const CF_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
+
+function pollinationsUrl(prompt) {
+  const seed = Math.floor(Math.random() * 1e9);
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
+}
+
 app.post('/api/generate-image', async (req, res) => {
   const { prompt } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Faltou a descrição da imagem.' });
-  try {
-    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://cain-app.onrender.com',
-        'X-Title': 'Cain',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-image-preview:free',
-        modalities: ['image', 'text'],
-        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-      }),
-    });
-    if (!r.ok) {
-      const errBody = await r.text().catch(() => '');
-      throw new Error(`Nano Banana falhou: ${r.status} ${errBody.slice(0, 200)}`);
+
+  // 1ª opção: Cloudflare Workers AI (FLUX), qualidade bem melhor, com limite diário grátis.
+  if (CF_ACCOUNT_ID && CF_API_TOKEN) {
+    try {
+      const r = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${CF_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ prompt }),
+        }
+      );
+      const data = await r.json().catch(() => ({}));
+      const limiteAtingido =
+        r.status === 429 ||
+        (Array.isArray(data.errors) && data.errors.some(e => /limit|quota|neuron/i.test(e.message || '')));
+      if (limiteAtingido) {
+        return res.status(429).json({
+          error: 'LIMITE_DIARIO',
+          message: 'O limite diário de imagens grátis foi atingido. Tente novamente amanhã, ou escrevo com o Pollinations agora mesmo se preferir.',
+        });
+      }
+      if (data.success && data.result && data.result.image) {
+        return res.json({ imageUrl: `data:image/jpeg;base64,${data.result.image}`, provider: 'cloudflare' });
+      }
+      console.warn('cloudflare image: resposta inesperada', JSON.stringify(data).slice(0, 300));
+    } catch (err) {
+      console.warn('cloudflare image falhou:', err.message);
     }
-    const data = await r.json();
-    const msg = data.choices && data.choices[0] && data.choices[0].message;
-    // A imagem pode vir em formatos ligeiramente diferentes dependendo da versão da API.
-    let imageUrl =
-      (msg && msg.images && msg.images[0] && (msg.images[0].image_url?.url || msg.images[0].url)) ||
-      (Array.isArray(msg?.content) && msg.content.find(c => c.type === 'image_url')?.image_url?.url) ||
-      null;
-    if (!imageUrl) throw new Error('Nenhuma imagem retornada.');
-    res.json({ imageUrl, provider: 'nano-banana' });
+  }
+
+  // Reserva: Pollinations (sempre funciona, sem chave, qualidade mais simples).
+  try {
+    res.json({ imageUrl: pollinationsUrl(prompt), provider: 'pollinations' });
   } catch (err) {
-    console.warn('generate-image:', err.message);
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: 'Não consegui gerar a imagem agora.' });
   }
 });
 
