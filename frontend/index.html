@@ -477,7 +477,7 @@ async function saveConversation() {
 function buildPollinationsUrl(prompt) {
   const seed = Math.floor(Math.random() * 1e9);
   const q = encodeURIComponent(prompt);
-  return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&enhance=true&seed=${seed}`;
+  return `https://image.pollinations.ai/prompt/${q}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
 }
 function preloadImage(url) {
   return new Promise((resolve, reject) => {
@@ -501,17 +501,20 @@ async function generateImage(prompt) {
   return url;
 }
 // Detecta pedidos de imagem em linguagem natural, sem precisar de um comando.
+// Mais flexível: basta ter um verbo de criação + uma palavra de imagem em qualquer ordem.
 function extractImagePrompt(text) {
-  const patterns = [
-    /^\/imagem\s+(.+)/i,
-    /^(?:crie?|gere?|desenhe?|fa[çc]a|monte)\s+(?:pra mim\s+)?(?:uma?\s+)?imagem\s+(?:de|do|da|com|sobre)\s+(.+)/i,
-    /^(?:crie?|gere?|desenhe?|fa[çc]a)\s+(?:uma?\s+)?(?:foto|ilustra[çc][ãa]o|desenho|arte)\s+(?:de|do|da|com|sobre)\s+(.+)/i,
-    /^imagem\s+de\s+(.+)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return m[1].trim();
+  const explicit = text.match(/^\/imagem\s+(.+)/i);
+  if (explicit) return explicit[1].trim();
+
+  const verbo = /\b(crie?|gere?|desenhe?|fa[çc]a|monte|cria|gera)\b/i;
+  const substantivo = /\b(imagem|imagens|foto|fotos|ilustra[çc][ãa]o|desenho|arte)\b/i;
+
+  if (verbo.test(text) && substantivo.test(text)) {
+    // Usa a frase inteira como prompt, só tirando o verbo de criação do início se estiver lá.
+    return text.replace(/^(crie?|gere?|desenhe?|fa[çc]a|monte|cria|gera)\s+/i, '').trim();
   }
+  const direto = text.match(/^imagem\s+de\s+(.+)/i);
+  if (direto) return direto[1].trim();
   return null;
 }
 async function sendMessage() {
