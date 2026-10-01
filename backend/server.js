@@ -156,14 +156,19 @@ app.post('/api/generate-image', async (req, res) => {
       headers: {
         'Authorization': `Bearer ${OPENROUTER_KEY}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://cain-app.onrender.com',
+        'X-Title': 'Cain',
       },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash-image-preview:free',
         modalities: ['image', 'text'],
-        messages: [{ role: 'user', content: prompt }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
       }),
     });
-    if (!r.ok) throw new Error(`Nano Banana falhou: ${r.status}`);
+    if (!r.ok) {
+      const errBody = await r.text().catch(() => '');
+      throw new Error(`Nano Banana falhou: ${r.status} ${errBody.slice(0, 200)}`);
+    }
     const data = await r.json();
     const msg = data.choices && data.choices[0] && data.choices[0].message;
     // A imagem pode vir em formatos ligeiramente diferentes dependendo da versão da API.
