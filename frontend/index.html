@@ -506,15 +506,10 @@ function extractImagePrompt(text) {
   const explicit = text.match(/^\/imagem\s+(.+)/i);
   if (explicit) return explicit[1].trim();
 
-  const verbo = /\b(crie?|gere?|desenhe?|fa[çc]a|monte|cria|gera)\b/i;
-  const substantivo = /\b(imagem|imagens|foto|fotos|ilustra[çc][ãa]o|desenho|arte)\b/i;
-
-  if (verbo.test(text) && substantivo.test(text)) {
-    // Usa a frase inteira como prompt, só tirando o verbo de criação do início se estiver lá.
-    return text.replace(/^(crie?|gere?|desenhe?|fa[çc]a|monte|cria|gera)\s+/i, '').trim();
-  }
-  const direto = text.match(/^imagem\s+de\s+(.+)/i);
-  if (direto) return direto[1].trim();
+  // Não depende mais de acertar o verbo (cobre erros de digitação como "cire" em vez de "crie").
+  // Basta ter "imagem/foto/desenho/ilustração/arte de/do/da ..." em qualquer lugar da frase.
+  const m = text.match(/(imagem|imagens|foto|fotos|ilustra[çc][ãa]o|desenho|arte)\s+(?:de|do|da)\s+(.+)/i);
+  if (m) return m[0].trim();
   return null;
 }
 async function sendMessage() {
