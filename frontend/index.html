@@ -81,6 +81,14 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9e
 .send{width:42px;height:42px;flex:none;border-radius:50%;border:none;background:var(--blue);color:#fff;display:grid;place-items:center;cursor:pointer;transition:opacity .2s}
 .send:disabled{opacity:.4}
 .send svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+#attach-btn{width:36px;height:36px;flex:none;border-radius:50%;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+#attach-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8}
+.attachment-chip{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 10px 7px 14px;margin-bottom:8px;font-size:13px;max-width:fit-content}
+.attachment-chip svg{width:16px;height:16px;stroke:var(--blue);fill:none;stroke-width:1.8;flex:none}
+.attachment-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.attachment-chip button{background:none;border:none;color:var(--muted);padding:2px;cursor:pointer;flex:none}
+.attachment-chip button svg{stroke:var(--muted);width:14px;height:14px}
+.user-attachment-thumb{max-width:160px;border-radius:12px;display:block;margin-bottom:8px;margin-left:auto}
 #mic-btn{width:36px;height:36px;flex:none;border-radius:50%;color:var(--muted);display:grid;place-items:center;cursor:pointer}
 #mic-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8}
 #mic-btn.recording{color:#fff;background:#d64545}
@@ -229,7 +237,18 @@ main{flex:1;min-height:0}
       </div>
       <div class="composer-wrap">
         <div class="wrap">
+          <div id="attachment-chip" class="attachment-chip" style="display:none">
+            <svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0V8z"/></svg>
+            <span id="attachment-name"></span>
+            <button id="attachment-remove" aria-label="Remover anexo">
+              <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
           <div class="composer">
+            <button id="attach-btn" class="icon-btn" aria-label="Anexar arquivo" style="background:none;border:none">
+              <svg viewBox="0 0 24 24"><path d="M21.44 11.05 12.25 20.24a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48"/></svg>
+            </button>
+            <input id="file-input" type="file" style="display:none" accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.json,.html,.htm,.xml,.log,.rtf">
             <input id="chat-input" type="text" placeholder="Escreva sua mensagem" autocomplete="off">
             <button id="mic-btn" class="icon-btn" aria-label="Ditar mensagem" style="background:none;border:none">
               <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 19v3"/></svg>
@@ -421,13 +440,21 @@ let currentConvId = null;
 const log = $('chat-log');
 function scrollDown() { $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; }
 function hideHero() { const h = $('hero'); if (h) h.style.display = 'none'; }
-function addUser(text) {
+function addUser(text, imageDataUrl, attachmentLabel) {
   const d = document.createElement('div');
   d.className = 'msg user';
+  const wrap = document.createElement('div');
+  if (imageDataUrl) {
+    const img = document.createElement('img');
+    img.className = 'user-attachment-thumb';
+    img.src = imageDataUrl;
+    wrap.appendChild(img);
+  }
   const b = document.createElement('div');
   b.className = 'bubble';
-  b.textContent = text;
-  d.appendChild(b);
+  b.textContent = attachmentLabel ? `📎 ${attachmentLabel}\n${text}` : text;
+  wrap.appendChild(b);
+  d.appendChild(wrap);
   log.appendChild(d);
   scrollDown();
 }
@@ -581,12 +608,155 @@ function extractImagePrompt(text) {
   if (m) return m[0].trim();
   return null;
 }
+// ---------- Anexar arquivo (imagem, PDF, DOCX, TXT, HTML, etc.) ----------
+let pendingAttachment = null; // { name, kind: 'image' | 'text', content }
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Não consegui carregar ' + src));
+    document.head.appendChild(s);
+  });
+}
+function readAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+function readAsText(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsText(file);
+  });
+}
+async function extractPdfText(file) {
+  await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.min.js');
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.6.347/pdf.worker.min.js';
+  const buf = await file.arrayBuffer();
+  const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+  let text = '';
+  const maxPages = Math.min(pdf.numPages, 40);
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(it => it.str).join(' ') + '\n';
+  }
+  if (pdf.numPages > maxPages) text += `\n[...PDF tem ${pdf.numPages} páginas, só as primeiras ${maxPages} foram lidas...]`;
+  return text.trim();
+}
+async function extractDocxText(file) {
+  await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.2/mammoth.browser.min.js');
+  const buf = await file.arrayBuffer();
+  const result = await window.mammoth.extractRawText({ arrayBuffer: buf });
+  return result.value.trim();
+}
+function extractHtmlText(raw) {
+  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  return (doc.body ? doc.body.textContent : raw).trim();
+}
+async function processAttachedFile(file) {
+  $('attachment-name').textContent = 'Lendo ' + file.name + '...';
+  $('attachment-chip').style.display = 'flex';
+  try {
+    let attachment;
+    if (file.type.startsWith('image/')) {
+      const dataUrl = await readAsDataURL(file);
+      attachment = { name: file.name, kind: 'image', content: dataUrl };
+    } else if (/\.pdf$/i.test(file.name)) {
+      const text = await extractPdfText(file);
+      attachment = { name: file.name, kind: 'text', content: text };
+    } else if (/\.docx?$/i.test(file.name)) {
+      const text = await extractDocxText(file);
+      attachment = { name: file.name, kind: 'text', content: text };
+    } else if (/\.html?$/i.test(file.name)) {
+      const raw = await readAsText(file);
+      attachment = { name: file.name, kind: 'text', content: extractHtmlText(raw) };
+    } else {
+      // txt, md, csv, json, xml, log, rtf e outros formatos baseados em texto
+      const raw = await readAsText(file);
+      attachment = { name: file.name, kind: 'text', content: raw };
+    }
+    pendingAttachment = attachment;
+    $('attachment-name').textContent = file.name;
+  } catch (err) {
+    pendingAttachment = null;
+    $('attachment-chip').style.display = 'none';
+    addBot(`Não consegui ler o arquivo "${file.name}". Formatos aceitos: imagens, PDF, DOCX, TXT, MD, CSV, JSON, HTML.`, true);
+  }
+}
+$('attach-btn').addEventListener('click', () => $('file-input').click());
+$('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) processAttachedFile(file);
+  e.target.value = '';
+});
+$('attachment-remove').addEventListener('click', () => {
+  pendingAttachment = null;
+  $('attachment-chip').style.display = 'none';
+});
+
 async function sendMessage() {
   const raw = $('chat-input').value.trim();
-  if (!raw || busy) return;
+  if ((!raw && !pendingAttachment) || busy) return;
   busy = true;
   $('send-btn').disabled = true;
   hideHero();
+
+  // Se tem um arquivo anexado, isso tem prioridade sobre a geração de imagem:
+  // o usuário quer que o Cain analise o que foi enviado, não crie algo novo.
+  if (pendingAttachment) {
+    const attachment = pendingAttachment;
+    pendingAttachment = null;
+    $('attachment-chip').style.display = 'none';
+    $('chat-input').value = '';
+    let contentForModel, contentForHistory;
+    if (attachment.kind === 'image') {
+      addUser(raw, attachment.content);
+      contentForModel = [
+        { type: 'text', text: raw || 'Descreva esta imagem.' },
+        { type: 'image_url', image_url: { url: attachment.content } },
+      ];
+      contentForHistory = contentForModel;
+    } else {
+      addUser(raw || 'Resuma o conteúdo acima.', null, attachment.name);
+      const trimmed = attachment.content.slice(0, 15000);
+      contentForModel = `Arquivo anexado "${attachment.name}":\n\`\`\`\n${trimmed}\n\`\`\`\n\n${raw || 'Resuma o conteúdo acima.'}`;
+      contentForHistory = contentForModel;
+    }
+    history.push({ role: 'user', content: contentForHistory });
+    const typing = addTyping();
+    const slow = setTimeout(() => typing.querySelector('.note').classList.add('show'), 7000);
+    const messagesForModel = history.map(m =>
+      m.type === 'image' ? { role: m.role, content: `[Imagem gerada: ${m.prompt}]` } : m
+    );
+    try {
+      const data = await post('/api/chat', { messages: messagesForModel });
+      typing.remove();
+      if (data.reply) {
+        addBot(data.reply);
+        history.push({ role: 'assistant', content: data.reply });
+        saveConversation();
+      } else {
+        addBot(data.error || 'Não consegui analisar o arquivo.', true);
+      }
+    } catch (e) {
+      typing.remove();
+      addBot('Não consegui falar com o servidor. Tente de novo.', true);
+    } finally {
+      clearTimeout(slow);
+      busy = false;
+      $('send-btn').disabled = false;
+    }
+    return;
+  }
 
   let imagePrompt = extractImagePrompt(raw);
   // Se o Cain sugeriu uma descrição entre aspas na resposta anterior e o usuário
@@ -815,7 +985,19 @@ async function openConversation(id) {
     log.querySelectorAll('.msg').forEach(m => m.remove());
     if (history.length) hideHero(); else $('hero').style.display = '';
     history.forEach(m => {
-      if (m.role === 'user') addUser(m.content);
+      if (m.role === 'user') {
+        if (Array.isArray(m.content)) {
+          const textPart = m.content.find(c => c.type === 'text');
+          const imgPart = m.content.find(c => c.type === 'image_url');
+          addUser(textPart ? textPart.text : '', imgPart ? imgPart.image_url.url : null);
+        } else if (typeof m.content === 'string' && /^Arquivo anexado "/.test(m.content)) {
+          const nameMatch = m.content.match(/^Arquivo anexado "([^"]+)"/);
+          const question = m.content.split('\n\n').slice(-1)[0];
+          addUser(question, null, nameMatch ? nameMatch[1] : 'arquivo');
+        } else {
+          addUser(m.content);
+        }
+      }
       else if (m.type === 'image') addImage(m.content, m.prompt);
       else addBot(m.content);
     });
