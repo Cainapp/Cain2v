@@ -415,6 +415,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 let history = [];
+let lastSuggestedImagePrompt = null;
 let busy = false;
 let currentConvId = null;
 const log = $('chat-log');
@@ -587,8 +588,15 @@ async function sendMessage() {
   $('send-btn').disabled = true;
   hideHero();
 
-  const imagePrompt = extractImagePrompt(raw);
+  let imagePrompt = extractImagePrompt(raw);
+  // Se o Cain sugeriu uma descrição entre aspas na resposta anterior e o usuário
+  // só confirmou de forma curta ("sim", "gere a imagem", "pode gerar"...), usa a sugestão.
+  if (!imagePrompt && lastSuggestedImagePrompt) {
+    const confirmou = /^(sim|gostaria( sim)?|pode( gerar)?|crie( a imagem)?|gere( a imagem)?|fa[çc]a( a imagem)?|confirmo|isso mesmo|exato|pode prosseguir|prossiga)\.?!?$/i.test(raw.trim());
+    if (confirmou) imagePrompt = lastSuggestedImagePrompt;
+  }
   if (imagePrompt) {
+    lastSuggestedImagePrompt = null;
     addUser(raw);
     history.push({ role: 'user', content: raw });
     $('chat-input').value = '';
@@ -640,6 +648,8 @@ async function sendMessage() {
       addBot(data.reply);
       history.push({ role: 'assistant', content: data.reply });
       saveConversation();
+      const sugestao = data.reply.match(/["“]([^"”]{10,250})["”]/);
+      lastSuggestedImagePrompt = sugestao ? sugestao[1].trim() : null;
     } else {
       addBot(data.error || 'Sem resposta. Tente de novo em instantes.', true);
     }
