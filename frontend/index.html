@@ -507,15 +507,66 @@ function preloadImage(url) {
     img.src = url;
   });
 }
-// O backend decide o provedor (Cloudflare FLUX primeiro, Pollinations como reserva).
-async function generateImage(prompt) {
-  const data = await post('/api/generate-image', { prompt });
+// O backend decide o provedor e avisa se bater num limite diário.
+// providerOverride é usado só quando o usuário já confirmou "sim, use esse".
+async function generateImage(prompt, providerOverride) {
+  const data = await post('/api/generate-image', { prompt, providerOverride });
   if (data.error === 'LIMITE_DIARIO') {
-    throw new Error(data.message);
+    const err = new Error(data.message);
+    err.limiteDiario = true;
+    err.nextProvider = data.nextProvider;
+    throw err;
   }
-  if (!data.imageUrl) throw new Error(data.error || 'Não consegui gerar a imagem agora.');
+  if (!data.imageUrl) throw new Error(data.error || data.message || 'Não consegui gerar a imagem agora.');
   await preloadImage(data.imageUrl);
   return data.imageUrl;
+}
+function addImageChoice(message, prompt, nextProvider) {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.innerHTML = SPARK;
+  const wrap = document.createElement('div');
+  wrap.className = 'text';
+  const p = document.createElement('div');
+  p.textContent = message;
+  wrap.appendChild(p);
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  chips.style.marginTop = '10px';
+  const simBtn = document.createElement('button');
+  simBtn.className = 'chip';
+  simBtn.textContent = 'Sim, prosseguir';
+  const naoBtn = document.createElement('button');
+  naoBtn.className = 'chip';
+  naoBtn.textContent = 'Não, obrigado';
+  simBtn.addEventListener('click', async () => {
+    chips.remove();
+    p.textContent += ' — Sim, prosseguir';
+    const loadingCard = addImageLoading(prompt);
+    try {
+      const url = await generateImage(prompt, nextProvider);
+      loadingCard.remove();
+      addImage(url, prompt);
+      history.push({ role: 'assistant', type: 'image', content: url, prompt });
+      saveConversation();
+    } catch (e) {
+      loadingCard.remove();
+      addBot(e.message || 'Não consegui gerar a imagem agora.', true);
+    }
+  });
+  naoBtn.addEventListener('click', () => {
+    chips.remove();
+    p.textContent += ' — Não, obrigado';
+  });
+  chips.appendChild(simBtn);
+  chips.appendChild(naoBtn);
+  wrap.appendChild(chips);
+  d.appendChild(avatar);
+  d.appendChild(wrap);
+  log.appendChild(d);
+  scrollDown();
 }
 // Detecta pedidos de imagem em linguagem natural, sem precisar de um comando.
 // Mais flexível: basta ter um verbo de criação + uma palavra de imagem em qualquer ordem.
@@ -550,7 +601,11 @@ async function sendMessage() {
       saveConversation();
     } catch (e) {
       loadingCard.remove();
-      addBot(e.message || 'Não consegui gerar a imagem agora. Tente de novo.', true);
+      if (e.limiteDiario) {
+        addImageChoice(e.message, imagePrompt, e.nextProvider);
+      } else {
+        addBot(e.message || 'Não consegui gerar a imagem agora. Tente de novo.', true);
+      }
     } finally {
       busy = false;
       $('send-btn').disabled = false;
