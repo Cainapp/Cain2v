@@ -155,49 +155,80 @@ function pollinationsUrl(prompt) {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
 }
 
+// Cadeia de provedores de imagem, em ordem de qualidade. "key" precisa bater
+// com o que o frontend manda em providerOverride; "label" é o nome amigável
+// mostrado na pergunta "deseja prosseguir?".
+const IMAGE_PROVIDERS = [
+  { key: 'cloudflare', label: 'Cloudflare FLUX (grátis, com limite diário)' },
+  { key: 'pollinations', label: 'Pollinations (sempre disponível, qualidade mais simples)' },
+];
+
+async function tryCloudflare(prompt) {
+  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) return { skip: true };
+  const r = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+    {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${CF_API_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    }
+  );
+  const data = await r.json().catch(() => ({}));
+  const limiteAtingido =
+    r.status === 429 ||
+    (Array.isArray(data.errors) && data.errors.some(e => /limit|quota|neuron/i.test(e.message || '')));
+  if (limiteAtingido) return { limitReached: true };
+  if (data.success && data.result && data.result.image) {
+    return { imageUrl: `data:image/jpeg;base64,${data.result.image}` };
+  }
+  console.warn('cloudflare image: resposta inesperada', JSON.stringify(data).slice(0, 300));
+  return { skip: true };
+}
+
+async function tryPollinations(prompt) {
+  return { imageUrl: pollinationsUrl(prompt) };
+}
+
+const PROVIDER_FN = { cloudflare: tryCloudflare, pollinations: tryPollinations };
+
 app.post('/api/generate-image', async (req, res) => {
-  const { prompt } = req.body;
+  const { prompt, providerOverride } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Faltou a descrição da imagem.' });
 
-  // 1ª opção: Cloudflare Workers AI (FLUX), qualidade bem melhor, com limite diário grátis.
-  if (CF_ACCOUNT_ID && CF_API_TOKEN) {
+  // Se o usuário já confirmou "sim, use o próximo", pula direto pra ele.
+  if (providerOverride) {
     try {
-      const r = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${CF_API_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ prompt }),
-        }
-      );
-      const data = await r.json().catch(() => ({}));
-      const limiteAtingido =
-        r.status === 429 ||
-        (Array.isArray(data.errors) && data.errors.some(e => /limit|quota|neuron/i.test(e.message || '')));
-      if (limiteAtingido) {
-        return res.status(429).json({
-          error: 'LIMITE_DIARIO',
-          message: 'O limite diário de imagens grátis foi atingido. Tente novamente amanhã, ou escrevo com o Pollinations agora mesmo se preferir.',
-        });
-      }
-      if (data.success && data.result && data.result.image) {
-        return res.json({ imageUrl: `data:image/jpeg;base64,${data.result.image}`, provider: 'cloudflare' });
-      }
-      console.warn('cloudflare image: resposta inesperada', JSON.stringify(data).slice(0, 300));
+      const result = await PROVIDER_FN[providerOverride](prompt);
+      if (result.imageUrl) return res.json({ imageUrl: result.imageUrl, provider: providerOverride });
+      return res.status(502).json({ error: 'Não consegui gerar a imagem com essa opção agora.' });
     } catch (err) {
-      console.warn('cloudflare image falhou:', err.message);
+      return res.status(502).json({ error: 'Não consegui gerar a imagem com essa opção agora.' });
     }
   }
 
-  // Reserva: Pollinations (sempre funciona, sem chave, qualidade mais simples).
-  try {
-    res.json({ imageUrl: pollinationsUrl(prompt), provider: 'pollinations' });
-  } catch (err) {
-    res.status(502).json({ error: 'Não consegui gerar a imagem agora.' });
+  // Fluxo normal: tenta o melhor provedor; se bater no limite diário dele,
+  // PERGUNTA antes de usar o próximo, em vez de trocar sem avisar.
+  for (let i = 0; i < IMAGE_PROVIDERS.length; i++) {
+    const { key } = IMAGE_PROVIDERS[i];
+    try {
+      const result = await PROVIDER_FN[key](prompt);
+      if (result.imageUrl) return res.json({ imageUrl: result.imageUrl, provider: key });
+      if (result.limitReached) {
+        const next = IMAGE_PROVIDERS[i + 1];
+        if (!next) return res.status(429).json({ error: 'SEM_PROVEDOR', message: 'Nenhuma opção de imagem disponível no momento.' });
+        return res.status(429).json({
+          error: 'LIMITE_DIARIO',
+          message: `Usamos todas as gerações grátis de hoje no ${IMAGE_PROVIDERS[i].label}. Ainda temos o ${next.label} disponível. Deseja prosseguir com ele?`,
+          nextProvider: next.key,
+          nextLabel: next.label,
+        });
+      }
+      // result.skip: provedor não configurado ou falhou de forma inesperada — tenta o próximo em silêncio.
+    } catch (err) {
+      console.warn(`${key} falhou:`, err.message);
+    }
   }
+  res.status(502).json({ error: 'Não consegui gerar a imagem agora. Tente de novo em instantes.' });
 });
 
 // ---------- Agentes ----------
