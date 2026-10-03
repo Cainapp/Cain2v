@@ -283,7 +283,7 @@ async function studyTopics() {
 
 // Endpoint para acionar o estudo de fora (ex: cron-job.org, grátis).
 // Protegido por um token de um usuário válido, enviado como ?key=TOKEN
-app.post('/api/study', async (req, res) => {
+app.all('/api/study', async (req, res) => {
   if (!process.env.STUDY_SECRET || req.query.key !== process.env.STUDY_SECRET) {
     return res.status(401).json({ error: 'Chave incorreta.' });
   }
