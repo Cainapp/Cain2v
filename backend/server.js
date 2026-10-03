@@ -266,6 +266,7 @@ app.get('/api/brain/knowledge', async (req, res) => {
 
 async function studyTopics() {
   const { rows: topics } = await pool.query('SELECT * FROM brain_topics');
+  console.log(`[cérebro] Começando a estudar ${topics.length} tema(s)...`);
   for (const t of topics) {
     try {
       const summary = await callModel(MODEL_FALLBACK[0], [
@@ -273,26 +274,25 @@ async function studyTopics() {
       ]);
       await pool.query('INSERT INTO brain_knowledge (topic, summary) VALUES ($1, $2)', [t.topic, summary]);
       await pool.query('UPDATE brain_topics SET last_studied = now() WHERE id = $1', [t.id]);
+      console.log(`[cérebro] OK: ${t.topic}`);
     } catch (err) {
-      console.warn(`Falha ao estudar ${t.topic}:`, err.message);
+      console.warn(`[cérebro] Falha ao estudar ${t.topic}:`, err.message);
     }
   }
+  console.log('[cérebro] Terminou.');
 }
 // const cron = require('node-cron');
 // cron.schedule('0 */6 * * *', studyTopics);
 
 // Endpoint para acionar o estudo de fora (ex: cron-job.org, grátis).
 // Protegido por um token de um usuário válido, enviado como ?key=TOKEN
-app.all('/api/study', async (req, res) => {
+app.all('/api/study', (req, res) => {
   if (!process.env.STUDY_SECRET || req.query.key !== process.env.STUDY_SECRET) {
     return res.status(401).json({ error: 'Chave incorreta.' });
   }
-  try {
-    await studyTopics();
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // Responde na hora pro cron não dar timeout; o estudo continua rodando depois, em segundo plano.
+  res.json({ ok: true, message: 'Estudo iniciado em segundo plano.' });
+  studyTopics().catch(err => console.error('[cérebro] Erro geral:', err.message));
 });
 
 // ---------- Plugins ----------
