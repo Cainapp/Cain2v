@@ -64,6 +64,8 @@ async function initDB() {
   // Migração: a tabela conversations pode já existir de uma versão anterior
   // (sem user_id), e CREATE TABLE IF NOT EXISTS não adiciona colunas novas.
   await pool.query(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id TEXT;`);
+  await pool.query(`ALTER TABLE plugins ADD COLUMN IF NOT EXISTS api_key TEXT;`);
+  await pool.query(`ALTER TABLE plugins ADD COLUMN IF NOT EXISTS catalog_id TEXT;`);
   console.log('Banco de dados pronto.');
 }
 
@@ -104,7 +106,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Protege todas as rotas /api, exceto o cadastro/login.
 app.use('/api', async (req, res, next) => {
-  if (req.path === '/auth/signup' || req.path === '/auth/login') return next();
+  if (req.path === '/auth/signup' || req.path === '/auth/login' || req.path === '/study') return next();
   const token = req.header('x-auth-token');
   if (!token) return res.status(401).json({ error: 'Não autenticado.' });
   const { rows } = await pool.query('SELECT id, email FROM users WHERE token = $1', [token]);
@@ -282,8 +284,9 @@ async function studyTopics() {
 // Endpoint para acionar o estudo de fora (ex: cron-job.org, grátis).
 // Protegido por um token de um usuário válido, enviado como ?key=TOKEN
 app.post('/api/study', async (req, res) => {
-  const { rows } = await pool.query('SELECT id FROM users WHERE token = $1', [req.query.key]);
-  if (!rows.length) return res.status(401).json({ error: 'Chave incorreta.' });
+  if (!process.env.STUDY_SECRET || req.query.key !== process.env.STUDY_SECRET) {
+    return res.status(401).json({ error: 'Chave incorreta.' });
+  }
   try {
     await studyTopics();
     res.json({ ok: true });
@@ -299,8 +302,15 @@ app.get('/api/plugins', async (req, res) => {
 });
 app.post('/api/plugins', async (req, res) => {
   const id = Date.now().toString();
-  const { name, endpoint } = req.body;
-  await pool.query('INSERT INTO plugins (id, name, endpoint) VALUES ($1, $2, $3)', [id, name, endpoint]);
+  const { name, endpoint, apiKey, catalogId } = req.body;
+  await pool.query(
+    'INSERT INTO plugins (id, name, endpoint, api_key, catalog_id) VALUES ($1, $2, $3, $4, $5)',
+    [id, name, endpoint, apiKey || null, catalogId || null]
+  );
+  res.json({ id, ok: true });
+});
+app.delete('/api/plugins/:id', async (req, res) => {
+  await pool.query('DELETE FROM plugins WHERE id = $1', [req.params.id]);
   res.json({ ok: true });
 });
 
