@@ -62,6 +62,12 @@ main{flex:1;min-height:0}
 .img-skeleton .shimmer{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(1,130,198,.18) 50%,transparent 70%);background-size:200% 100%;animation:shimmer 1.4s infinite}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .img-caption{color:var(--muted);font-size:13px;margin-top:6px}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:60;display:flex;align-items:center;justify-content:center;padding:24px;padding-top:calc(24px + env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
+.lightbox img{max-width:100%;max-height:80vh;border-radius:12px;object-fit:contain}
+.lightbox-close{position:fixed;top:calc(16px + env(safe-area-inset-top,0px));right:16px;width:40px;height:40px;border-radius:50%;background:var(--surface);border:1px solid var(--line);color:#fff;display:grid;place-items:center;cursor:pointer}
+.lightbox-close svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2}
+.lightbox-download{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;background:var(--blue);color:#fff;border-radius:999px;padding:12px 22px;font:600 14px var(--sans);text-decoration:none;white-space:nowrap}
+.lightbox-download svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2}
 .msg.bot.error .text{color:#e6a1a1}
 code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9em}
 .dots{display:inline-flex;gap:5px;padding:9px 0}
@@ -472,6 +478,28 @@ function addBot(text, isError) {
   log.appendChild(d);
   scrollDown();
 }
+function openImageLightbox(url, prompt) {
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = prompt || '';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'lightbox-close';
+  closeBtn.setAttribute('aria-label', 'Fechar');
+  closeBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+  const dlBtn = document.createElement('a');
+  dlBtn.className = 'lightbox-download';
+  dlBtn.href = url;
+  dlBtn.download = (prompt ? prompt.slice(0, 40).replace(/[^\w\- ]/g, '') : 'imagem-cain') + '.jpg';
+  dlBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg> Baixar imagem';
+  overlay.appendChild(img);
+  overlay.appendChild(closeBtn);
+  overlay.appendChild(dlBtn);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  closeBtn.addEventListener('click', () => overlay.remove());
+  document.body.appendChild(overlay);
+}
 function addImage(url, prompt) {
   const d = document.createElement('div');
   d.className = 'msg bot';
@@ -482,11 +510,13 @@ function addImage(url, prompt) {
   wrap.className = 'text';
   const box = document.createElement('div');
   box.className = 'img-bubble';
+  box.style.cursor = 'pointer';
   const img = document.createElement('img');
   img.src = url;
   img.alt = prompt;
   img.loading = 'lazy';
   box.appendChild(img);
+  box.addEventListener('click', () => openImageLightbox(url, prompt));
   wrap.appendChild(box);
   const cap = document.createElement('div');
   cap.className = 'img-caption';
@@ -745,18 +775,24 @@ async function sendMessage() {
       m.type === 'image' ? { role: m.role, content: `[Imagem gerada: ${m.prompt}]` } : m
     );
     try {
-      const data = await post('/api/chat', { messages: messagesForModel });
+      let data;
+      try {
+        data = await post('/api/chat', { messages: messagesForModel });
+      } catch (firstErr) {
+        // Falha de rede/servidor: tenta mais uma vez antes de desistir.
+        data = await post('/api/chat', { messages: messagesForModel });
+      }
       typing.remove();
       if (data.reply) {
         addBot(data.reply);
         history.push({ role: 'assistant', content: data.reply });
         saveConversation();
       } else {
-        addBot(data.error || 'Não consegui analisar o arquivo.', true);
+        addBot(data.error || 'Não consegui analisar o arquivo. O arquivo pode ser grande ou pesado demais — tente um menor.', true);
       }
     } catch (e) {
       typing.remove();
-      addBot('Não consegui falar com o servidor. Tente de novo.', true);
+      addBot('Não consegui falar com o servidor depois de tentar duas vezes. Verifique sua internet e tente de novo em instantes.', true);
     } finally {
       clearTimeout(slow);
       busy = false;
@@ -1089,10 +1125,25 @@ async function loadBrain() {
       tl.appendChild(row);
     });
     if (!knowledge.length) emptyState(kl, 'Quando a IA estudar os temas, os resumos aparecem aqui.');
-    knowledge.slice().reverse().forEach(k => {
+    // Agrupa tudo por tema: um card só por tema, com todos os resumos dentro, mais recente primeiro.
+    const byTopic = new Map();
+    knowledge.forEach(k => {
+      if (!byTopic.has(k.topic)) byTopic.set(k.topic, []);
+      byTopic.get(k.topic).push(k);
+    });
+    byTopic.forEach((entries, topic) => {
+      entries.sort((a, b) => new Date(b.date) - new Date(a.date));
       const row = document.createElement('div');
       row.className = 'row know';
-      row.innerHTML = '<span class="tag">' + esc(k.topic) + '</span><div class="body">' + esc(k.summary) + '</div>';
+      const head = document.createElement('div');
+      head.innerHTML = '<span class="tag">' + esc(topic) + '</span> <span style="color:var(--muted);font-size:12px">' + entries.length + (entries.length > 1 ? ' estudos' : ' estudo') + '</span>';
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.innerHTML = entries.map(e =>
+        '<div style="margin-bottom:14px"><div style="color:var(--muted);font-size:12px;margin-bottom:4px">' + esc(fmtDate(e.date)) + '</div>' + esc(e.summary) + '</div>'
+      ).join('<hr style="border:none;border-top:1px solid var(--line);margin:10px 0">');
+      row.appendChild(head);
+      row.appendChild(body);
       row.addEventListener('click', () => row.classList.toggle('open'));
       kl.appendChild(row);
     });
@@ -1187,8 +1238,13 @@ function renderCatalog() {
           apiKey = prompt(`Cole a chave/token de ${item.name} (${item.desc.split('—')[1] ? item.desc.split('—')[1].trim() : ''}):`);
           if (!apiKey) return;
         }
-        await post('/api/plugins', { name: item.name, endpoint: item.endpoint, apiKey, catalogId: item.id });
-        loadPlugins();
+        btn.disabled = true;
+        btn.textContent = 'Vinculando...';
+        try {
+          await post('/api/plugins', { name: item.name, endpoint: item.endpoint, apiKey, catalogId: item.id });
+        } finally {
+          loadPlugins();
+        }
       });
     }
     row.appendChild(ini);
