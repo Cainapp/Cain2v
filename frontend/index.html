@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -23,8 +23,8 @@
   --sans:'Manrope',-apple-system,'Segoe UI',system-ui,sans-serif;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;position:fixed;inset:0}
 button{font-family:inherit}
 button:focus-visible,select:focus-visible,.chip:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 
@@ -104,6 +104,14 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:6px;font-size:.9e
 .code-block{background:#0d0e10;border:1px solid var(--line);border-radius:12px;margin:10px 0;overflow:hidden}
 .code-block .copy-code-btn{display:block;margin-left:auto;background:var(--surface-2);color:var(--text);border:none;border-bottom:1px solid var(--line);padding:6px 14px;font:600 12px var(--sans);cursor:pointer}
 .code-block pre{margin:0;padding:14px;overflow-x:auto;font:13px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
+.movie-grid{display:flex;gap:12px;overflow-x:auto;padding:10px 0;margin:10px 0;-webkit-overflow-scrolling:touch}
+.movie-loading{color:var(--muted);font-size:13px;padding:8px 0}
+.movie-card{flex:none;width:120px}
+.movie-card img{width:120px;height:180px;object-fit:cover;border-radius:10px;border:1px solid var(--line);cursor:pointer;background:var(--surface-2)}
+.movie-noposter{width:120px;height:180px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);display:grid;place-items:center;font-size:32px}
+.movie-info{margin-top:6px}
+.movie-title{font-size:12px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.movie-meta{font-size:11px;color:var(--muted);margin-top:2px}
 
 .page-title{font-family:var(--serif);font-weight:400;font-size:30px;letter-spacing:-.01em;margin:14px 0 4px}
 .page-sub{color:var(--muted);margin:0 0 20px;font-size:14px;max-width:44ch}
@@ -409,18 +417,81 @@ function esc(s) {
 }
 function fmt(s) {
   const blocks = [];
-  let text = s.replace(/```[a-zA-Z]*\n?([\s\S]*?)```/g, (m, code) => {
-    blocks.push(code.trim());
+  let text = s.replace(/```([a-zA-Z]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    blocks.push({ lang: (lang || '').toLowerCase(), code: code.trim() });
     return `\u0000${blocks.length - 1}\u0000`;
   });
   text = esc(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
   text = text.replace(/\u0000(\d+)\u0000/g, (m, i) => {
-    const code = blocks[parseInt(i, 10)];
+    const block = blocks[parseInt(i, 10)];
+    if (block.lang === 'filmes') {
+      const titles = block.code.split('\n').map(t => t.trim()).filter(Boolean);
+      return `<div class="movie-grid" data-titles='${esc(JSON.stringify(titles))}'><div class="movie-loading">Buscando pôsteres...</div></div>`;
+    }
     const id = 'cb_' + Math.random().toString(36).slice(2) + Date.now();
-    window.__codeBlocks[id] = code;
-    return `<div class="code-block"><button class="copy-code-btn" data-id="${id}">Copiar</button><pre>${esc(code)}</pre></div>`;
+    window.__codeBlocks[id] = block.code;
+    return `<div class="code-block"><button class="copy-code-btn" data-id="${id}">Copiar</button><pre>${esc(block.code)}</pre></div>`;
   });
   return text;
+}
+async function activateMovieGrids(container) {
+  const grids = container.querySelectorAll('.movie-grid[data-titles]');
+  for (const grid of grids) {
+    const titles = JSON.parse(grid.dataset.titles.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+    grid.removeAttribute('data-titles');
+    try {
+      const data = await post('/api/movies', { titles });
+      grid.innerHTML = '';
+      (data.results || []).forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'movie-card';
+        if (m.found && m.posterUrl) {
+          const img = document.createElement('img');
+          img.src = m.posterUrl;
+          img.alt = m.title;
+          img.loading = 'lazy';
+          img.addEventListener('click', () => openImageLightbox(m.posterUrl, m.title));
+          card.appendChild(img);
+        } else {
+          const ph = document.createElement('div');
+          ph.className = 'movie-noposter';
+          ph.textContent = '🎬';
+          card.appendChild(ph);
+        }
+        const info = document.createElement('div');
+        info.className = 'movie-info';
+        info.innerHTML = '<div class="movie-title">' + esc(m.title) + '</div>' +
+          (m.year || m.rating ? '<div class="movie-meta">' + esc([m.year, m.rating ? '⭐ ' + m.rating : null].filter(Boolean).join(' · ')) + '</div>' : '');
+        card.appendChild(info);
+        grid.appendChild(card);
+      });
+      if (!data.results || !data.results.length) grid.innerHTML = '<div class="movie-loading">Não encontrei os pôsteres.</div>';
+    } catch (e) {
+      grid.innerHTML = '<div class="movie-loading">Não consegui buscar os pôsteres agora.</div>';
+    }
+  }
+}
+// Reserva: se o modelo recomendou filmes mas não usou o bloco ```filmes```,
+// tenta achar os títulos do jeito que ele normalmente escreve (negrito + ano).
+function extractMovieTitlesFallback(text) {
+  const matches = [...text.matchAll(/\*\*([^*\n(]{2,60}?)\*\*\s*\((\d{4})\)/g)];
+  const titles = matches.map(m => `${m[1].trim()} (${m[2]})`);
+  return [...new Set(titles)];
+}
+function addMovieGridMessage(titles) {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.innerHTML = SPARK;
+  const wrap = document.createElement('div');
+  wrap.className = 'text';
+  wrap.innerHTML = '<div class="movie-grid" data-titles=\'' + esc(JSON.stringify(titles)) + '\'><div class="movie-loading">Buscando pôsteres...</div></div>';
+  d.appendChild(avatar);
+  d.appendChild(wrap);
+  log.appendChild(d);
+  scrollDown();
+  activateMovieGrids(d);
 }
 function fmtDate(iso) {
   if (!iso) return 'ainda não estudado';
@@ -478,6 +549,7 @@ function addBot(text, isError) {
   d.innerHTML = '<div class="avatar">' + SPARK + '</div><div class="text">' + fmt(text) + '</div>';
   log.appendChild(d);
   scrollDown();
+  if (d.querySelector('.movie-grid')) activateMovieGrids(d);
 }
 function openImageLightbox(url, prompt) {
   const overlay = document.createElement('div');
@@ -642,7 +714,7 @@ function extractImagePrompt(text) {
 
   // Não depende mais de acertar o verbo (cobre erros de digitação como "cire" em vez de "crie").
   // Basta ter "imagem/foto/desenho/ilustração/arte de/do/da ..." em qualquer lugar da frase.
-  const m = text.match(/(imagem|imagens|foto|fotos|ilustra[çc][ãa]o|desenho|arte)\s+(?:de|do|da)\s+(.+)/i);
+  const m = text.match(/(imagem|imagens|foto|fotos|ilustra[çc][ãa]o|desenho|arte|p[oô]ster|p[oô]steres|cartaz|cartazes)\s+(?:de|do|da|dos|das|pra|para|com|sobre)\s+(.+)/i);
   if (m) return m[0].trim();
   return null;
 }
@@ -852,9 +924,8 @@ async function sendMessage() {
   const avisoImagem = temImagem
     ? 'Importante: este app tem uma ferramenta separada de geração de imagens. Mensagens marcadas como "[Imagem gerada: ...]" indicam que uma imagem REAL já foi criada e mostrada ao usuário por essa ferramenta — você mesmo não a gera, mas ela existe de verdade. Nunca diga que não é possível gerar imagens ou que isso foi só uma descrição textual; se o usuário reclamar do resultado, ajude a melhorar a descrição do pedido.'
     : null;
-  const finalAgentPrompt = avisoImagem
-    ? (agentPrompt ? `${agentPrompt}\n\n${avisoImagem}` : avisoImagem)
-    : agentPrompt;
+  const avisoFilmes = 'Quando recomendar ou listar filmes, séries ou animações, NUNCA invente ou descreva um pôster em texto. Em vez disso, ao final da resposta, inclua um bloco separado assim: ```filmes\nTítulo do Filme 1\nTítulo do Filme 2\n```, um título por linha, só o nome (pode incluir o ano entre parênteses se ajudar a achar o certo), sem comentários dentro do bloco. Um sistema separado vai buscar o pôster real de cada um automaticamente.';
+  const finalAgentPrompt = [agentPrompt, avisoImagem, avisoFilmes].filter(Boolean).join('\n\n');
   try {
     const data = await post('/api/chat', { messages: messagesForModel, agentSystemPrompt: finalAgentPrompt });
     typing.remove();
@@ -864,6 +935,10 @@ async function sendMessage() {
       saveConversation();
       const sugestao = data.reply.match(/["“]([^"”]{10,250})["”]/);
       lastSuggestedImagePrompt = sugestao ? sugestao[1].trim() : null;
+      if (!/```filmes/i.test(data.reply)) {
+        const titulosReserva = extractMovieTitlesFallback(data.reply);
+        if (titulosReserva.length >= 2) addMovieGridMessage(titulosReserva);
+      }
     } else {
       addBot(data.error || 'Sem resposta. Tente de novo em instantes.', true);
     }
