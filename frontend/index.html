@@ -440,7 +440,13 @@ async function activateMovieGrids(container) {
     const titles = JSON.parse(grid.dataset.titles.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
     grid.removeAttribute('data-titles');
     try {
-      const data = await post('/api/movies', { titles });
+      let data;
+      try {
+        data = await post('/api/movies', { titles });
+      } catch (firstErr) {
+        await new Promise(r => setTimeout(r, 2000));
+        data = await post('/api/movies', { titles });
+      }
       grid.innerHTML = '';
       (data.results || []).forEach(m => {
         const card = document.createElement('div');
