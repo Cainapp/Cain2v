@@ -473,7 +473,7 @@ async function activateMovieGrids(container) {
       });
       if (!data.results || !data.results.length) grid.innerHTML = '<div class="movie-loading">Não encontrei os pôsteres.</div>';
     } catch (e) {
-      grid.innerHTML = '<div class="movie-loading">Não consegui buscar os pôsteres agora.</div>';
+      grid.innerHTML = '<div class="movie-loading">Não consegui buscar os pôsteres agora. (' + esc(e.message || e.toString()) + ')</div>';
     }
   }
 }
